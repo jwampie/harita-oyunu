@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dünya Ülkeler Oyunu</title>
-<style> 
+<title>Dünya Ülkeleri Oyunu</title>
+<style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #0f172a; color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
@@ -17,6 +17,17 @@
   #header-center { display: flex; align-items: center; gap: 16px; }
   #progress { font-size: 0.85rem; color: #94a3b8; }
   #progress span { color: #38bdf8; font-weight: 700; }
+  #timer {
+    background: #064e3b;          /* Koyu yeşil arka plan */
+    border: 1px solid #065f46;    /* Daha koyu yeşil kenarlık */
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 0.8rem;
+    color: #6ee7b7;               /* Açık nane yeşili yazı rengi */
+    font-weight: 700;
+    white-space: nowrap;
+    display: inline-block;        /* Hizalama için */
+}
   #wrong-count {
     background: #7f1d1d; border: 1px solid #991b1b; border-radius: 6px;
     padding: 3px 10px; font-size: 0.8rem; color: #fca5a5; white-space: nowrap;
@@ -59,17 +70,19 @@
     filter: drop-shadow(0 0 3px #f97316);
   }
 
-  #country-tooltip {
+#country-tooltip {
     position: absolute; pointer-events: none; z-index: 80;
-    background: #0f172aee; border: 1px solid #334155; border-radius: 6px;
-    padding: 4px 10px; font-size: 0.78rem; color: #e2e8f0; white-space: nowrap;
-    display: none; transform: translate(-50%, -130%);
-    box-shadow: 0 2px 8px #0006;
-  }
-  #country-tooltip::after {
+    background: #0f172aee; border: 1px solid #334155; border-radius: 8px;
+    padding: 8px; /* Biraz daha fazla boşluk verdik */
+    font-size: 0.85rem; color: #e2e8f0; 
+    display: none; transform: translate(-50%, -110%);
+    box-shadow: 0 4px 12px #0008;
+    text-align: center; /* Bayrağı ortalar */
+}
+#country-tooltip::after {
     content: ''; position: absolute; left: 50%; bottom: -5px; transform: translateX(-50%);
-    border: 5px solid transparent; border-bottom: none; border-top-color: #334155;
-  }
+    border: 5px solid transparent; border-top-color: #334155; /* Okun yönünü düzelttik */
+}
 
   #show-remaining-btn {
     position: absolute; bottom: 14px; left: 14px; z-index: 60;
@@ -219,6 +232,9 @@
   <div id="header-center">
     <div id="progress">İlerleme: <span id="prog-count">0</span> / 197</div>
     <div id="wrong-count">Yanlış: <span id="wrong-num">0</span></div>
+	<div id="status-bar">
+    <span style="margin-left: 15px;">Süre: <span id="timer">30:00</span></span>
+</div>
   </div>
   <div id="zoom-controls">
     <span id="zoom-level-label">Genel</span>
@@ -236,7 +252,7 @@
     </div>
 
     <div id="country-tooltip"></div>
-    <div id="map-hint">Ülkeler oyunu 2026</div>
+    <div id="map-hint">Ülke Bulma oyunu 2026 linkedin.com/in/melihmavi<br>Ülke Bayrakları FlagCDN API ile çekilmektedir.<br>Ülke Sınırları OSM'den çekilip basitleştirilerek oyunun içine entegre edilmiştir.</div>
 
     <button id="show-remaining-btn">
       <span class="dot-icon"></span>
@@ -285,6 +301,56 @@ const CONTINENTS_ORDER = ["Avrupa","Asya","Kuzey Amerika","Güney Amerika","Afri
 const CENTROIDS = {"Almanya": [9.877098936, 50.763668987], "Andorra": [1.52646608, 42.52623372], "Arnavutluk": [20.046410921052633, 41.05361421052632], "Avusturya": [13.451951084444444, 47.65213912222222], "Belçika": [5.009855868181818, 50.72022421590909], "Beyaz Rusya": [28.093275046969698, 53.49769288939394], "Birleşik Krallık": [-3.7347859336842104, 54.85330717052632], "Bosna-Hersek": [17.905391803703704, 44.06259647777778], "Bulgaristan": [25.22455167297297, 42.77372351351352], "Danimarka": [10.55133265882353, 56.09927923529411], "Estonya": [24.986967536, 58.299790316], "Finlandiya": [25.63863599275362, 65.82028325217391], "Fransa": [2.794947405952381, 46.952163015476195], "Hırvatistan": [16.47471249310345, 44.479090443103445], "Hollanda": [5.478255747058824, 51.782163352941176], "İrlanda": [-8.053907149999999, 53.60006471], "İspanya": [-3.7460845483333336, 40.50899481333333], "İsveç": [16.63698839, 62.726376297777776], "İsviçre": [8.52950759117647, 46.74641329705882], "İtalya": [12.358440081176472, 42.51195940352941], "İzlanda": [-17.872471424, 65.41531328], "Karadağ": [19.26214395625, 42.6187071875], "Kosova": [20.7889073, 42.63870325714286], "Letonya": [24.79471032142857, 56.869232607142855], "Lihtenştayn": [9.550725825, 47.136779475], "Litvanya": [23.930291786206897, 55.08630276206897], "Lüksemburg": [6.020197075, 49.725272775], "Macaristan": [19.0390076, 47.5681066], "Kuzey Makedonya": [21.894839283333337, 41.4997271], "Malta": [14.309490957142858, 36.005823771428574], "Moldova": [28.652441541176472, 47.11319997058824], "Monako": [7.427178785714285, 43.73976171428571], "Norveç": [16.866431383870967, 65.63399351182795], "Polonya": [18.753557262745097, 51.50692886470588], "Portekiz": [-7.907244335714286, 39.62384827142857], "Romanya": [24.972215495238093, 45.70960167142857], "Rusya": [90.45129983855263, 57.533556035], "San Marino": [12.46888, 43.949811499999996], "Sırbistan": [20.635121241860464, 44.21102860465116], "Slovakya": [19.528398022222223, 48.67022864444444], "Slovenya": [14.966323396296296, 46.066139648148145], "Ukrayna": [31.603414067716535, 48.7096622992126], "Vatikan": [12.45592025, 41.904307], "Yunanistan": [23.555979173451327, 38.570064918584066], "Afganistan": [67.52257408913044, 34.826946523913044], "Azerbaycan": [47.37973349285714, 40.22614070238095], "Bahreyn": [50.548602914285716, 26.114084228571432], "Bangladeş": [90.11351365714286, 24.226888223809524], "Bhutan": [90.48298046470589, 27.39919235882353], "Birleşik Arap Emirlikleri": [54.45648301785714, 24.687777892857145], "Myanmar": [97.50723105181818, 21.189069328181816], "Brunei": [114.8170213181818, 4.6795335636363635], "Çin": [104.72512216036269, 37.89379489663212], "Endonezya": [119.53650816638655, -1.9529090831932772], "Ermenistan": [45.28617852222222, 40.133198433333334], "Filipinler": [121.10529653846154, 10.362125302564102], "Güney Kore": [127.11725503225806, 35.69010933548387], "Gürcistan": [43.611329383333334, 42.150343330000005], "Hindistan": [83.65834727056277, 25.973616373160173], "Irak": [44.95603387647059, 33.61578760588235], "İran": [52.80124909333334, 34.00186764095238], "İsrail": [35.098930005, 32.031174005000004], "Japonya": [135.7666889390625, 35.235719896875], "Kamboçya": [105.24539712608694, 12.381190063043478], "Katar": [51.12962826666667, 25.469819844444444], "Kazakistan": [65.85796970798319, 49.12009472268908], "Kırgızistan": [73.15622842, 41.00370889142857], "Kuveyt": [47.773373129999996, 29.202926150000003], "Kuzey Kore": [128.3293401125, 40.96656696785714], "Laos": [103.60154393461539, 18.70192527307692], "Lübnan": [35.93985474285714, 33.85113257142857], "Maldivler": [73.22538251666667, 3.632738408333333], "Malezya": [115.03412323773584, 3.6536946924528304], "Moğolistan": [101.98003606806722, 47.76228822605042], "Nepal": [84.35221460784314, 28.09631970392157], "Özbekistan": [65.98441172150538, 40.94226118494623], "Pakistan": [70.41665528198199, 30.81051785135135], "Singapur": [103.81310142, 1.30690578], "Sri Lanka": [80.46213855882354, 8.028466164705883], "Suriye": [37.84937984324324, 35.29547749459459], "Suudi Arabistan": [43.851194515625, 24.1822602453125], "Tacikistan": [70.66628625068493, 38.87726488904109], "Tayland": [100.41348396981132, 13.38100178490566], "Tayvan": [120.98273636363636, 23.74476363636364], "Doğu Timor": [125.80406163636363, -8.762695209090909], "Türkiye": [34.32595902970297, 39.06482042079208], "Türkmenistan": [58.779076814084505, 39.32909711267605], "Umman": [56.625102602702704, 21.339695805405405], "Ürdün": [37.1150676, 31.316410377777782], "Vietnam": [105.37323893411765, 17.30407198470588], "Yemen": [45.321856304444445, 15.5398274], "Angola": [17.76856367962963, -11.716685840740741], "Benin": [2.264240103448276, 9.899822355172414], "Botsvana": [24.474472113157894, -22.67245503157895], "Burkina Faso": [-1.9540900296296297, 12.183515250000001], "Burundi": [29.897957209999998, -3.0849948300000003], "Yeşil Burun Adaları": [-24.420759607692307, 16.24220826923077], "Çad": [18.444032730508475, 13.283857238983051], "Cezayir": [2.9936915493150686, 30.018592779452057], "Cibuti": [42.73806363333333, 11.951103716666665], "Kongo Demokratik Cumhuriyeti": [23.733039837301586, -4.0326437126984125], "Ekvator Ginesi": [10.03101931111111, 1.6011317555555555], "Eritre": [39.37649471388889, 15.134563283333332], "Esvatini": [31.454398322222218, -26.639726044444444], "Etiyopya": [38.595335823333336, 8.969626273333335], "Fas": [-7.63354509032258, 29.89981880483871], "Fildişi Sahili": [-6.027494740000001, 8.197017489090909], "Gabon": [12.24913292051282, -1.2638032205128205], "Gambiya": [-15.629700135294119, 13.411939570588235], "Gana": [-1.0487809756756756, 7.927077686486486], "Gine-Bissau": [-15.04126445, 11.894066125], "Gine": [-10.786702361428572, 10.104402247142856], "Güney Afrika": [24.48506530952381, -27.81754585873016], "Güney Sudan": [30.223550971428573, 7.38185026103896], "Kamerun": [12.581684814545456, 7.3040923399999995], "Kenya": [37.433251040740736, 1.806869248148148], "Komorlar": [43.594680700000005, -11.965761042857142], "Kongo Cumhuriyeti": [14.316883391044776, -1.4873248731343285], "Lesotho": [28.072386425, -29.707540775], "Liberya": [-9.233473266666666, 6.895448108333333], "Libya": [15.629995807142857, 28.36637702142857], "Madagaskar": [46.51186792000001, -18.438835184], "Malavi": [34.0999851475, -13.1495939125], "Mali": [-5.5917508209302325, 14.232735451162792], "Mauritius": [57.56819854285715, -20.281530371428573], "Mısır": [31.019668679166667, 28.409264716666666], "Moritanya": [-12.04745590882353, 18.78749508529412], "Mozambik": [35.067023299999995, -17.36925478], "Namibya": [17.81980199, -21.571115335], "Nijer": [7.179463152830188, 15.390115], "Nijerya": [8.588758339682538, 9.664470276190476], "Orta Afrika Cumhuriyeti": [21.171710824242425, 6.290103021212121], "Ruanda": [29.69662677222222, -2.1350572333333333], "São Tomé ve Príncipe": [6.882716285714286, 0.7661330571428572], "Senegal": [-14.736109030232559, 13.90596228372093], "Seyşeller": [55.565924575, -4.188592458333333], "Sierra Leone": [-11.71211674, 8.515746595], "Somali": [46.383402884999995, 7.717206482500001], "Sudan": [30.13009041647059, 13.924970928235293], "Tanzanya": [34.64480727115385, -7.289034732692307], "Togo": [0.7558412076923078, 8.866024626923076], "Tunus": [9.660732216666666, 34.76734600714286], "Uganda": [32.15832942666667, 1.79747474], "Zambiya": [28.716245491549298, -12.545151052112676], "Zimbabve": [29.97920074347826, -18.986823249999997], "Antigua ve Barbuda": [-62.04546738571428, 17.26367467142857], "Bahamalar": [-77.82917322222222, 24.22186318888889], "Barbados": [-59.649482666666664, 13.179166666666667], "Belize": [-88.31159447692306, 17.301341484615385], "Amerika Birleşik Devletleri": [-154.9401777894737, 59.32872402966507], "Dominik Cumhuriyeti": [-70.9392948, 19.2204321], "Dominika": [-61.37928376, 15.424767220000001], "El Salvador": [-88.83885777333333, 13.676459719999999], "Grenada": [-61.73123285, 12.104377883333333], "Guatemala": [-90.33877065, 15.497347386363636], "Haiti": [-72.97540179166667, 18.934009733333333], "Honduras": [-85.62977946999999, 14.735827277499999], "Jamaika": [-77.65512386666666, 17.937728355555556], "Kanada": [-90.19714643157894, 58.13878286172249], "Kosta Rika": [-83.93214858461539, 10.032272415384616], "Küba": [-79.84185872272727, 21.359846490909092], "Meksika": [-102.29787156305733, 23.447576457324843], "Nikaragua": [-85.08108278181818, 12.876554572727272], "Panama": [-80.59820561304348, 8.57294694347826], "Saint Kitts ve Nevis": [-62.77133056, 17.2691771], "Saint Lucia": [-61.00953751428572, 13.857720214285715], "Saint Vincent ve Grenadinler": [-61.2730241, 12.865032814285714], "Trinidad ve Tobago": [-61.16507465, 10.638893975], "Arjantin": [-65.40296336026786, -36.854675067857144], "Bolivya": [-64.95238007922079, -16.653619951948052], "Brezilya": [-57.66491978427947, -9.936359204803495], "Ekvador": [-78.20804592972974, -1.8838365324324322], "Guyana": [-59.02059378297872, 4.505840117021276], "Kolombiya": [-72.24790658333333, 3.5129209722222225], "Paraguay": [-57.80937787962963, -24.717082201851852], "Peru": [-74.69393867096774, -7.812126952688172], "Şili": [-71.34507574590164, -38.23215423169399], "Surinam": [-56.05354881923077, 3.801133069230769], "Uruguay": [-56.737236258974356, -32.390334156410255], "Venezuela": [-65.93065709252336, 7.020925980373832], "Avustralya": [136.43432672941177, -25.465007968382352], "Fiji": [-178.94960173333334, -18.881178266666666], "Kiribati": [173.26603055454547, 1.6698522636363635], "Marshall Adaları": [167.15464786956522, 8.782336173913043], "Mikronezya": [151.66736777, 8.56457333], "Nauru": [166.89041758, -0.5280164], "Palau": [132.75526132, 5.17315599], "Papua Yeni Gine": [148.87223262428572, -6.895233347142858], "Samoa": [-172.13203718999998, -13.771896799999999], "Solomon Adaları": [158.63886992941178, -8.390132852941177], "Tonga": [-174.71516591666668, -19.918571358333335], "Tuvalu": [179.09127897142858, -8.638256], "Vanuatu": [168.3486257666667, -16.923076386666665], "Yeni Zelanda": [173.02211457530865, -40.729137560493825], "Çekya": [15.276788623287672, 49.92303260684931], "Kıbrıs": [33.16843669545777, 35.04162726891413], "Kuzey Kıbrıs Türk Cumhuriyeti": [33.53030866062992, 35.148162903513025]};
 const TOTAL = 197;
 
+const FLAG_MAP = {
+  "Almanya": "de", "Andorra": "ad", "Arnavutluk": "al", "Avusturya": "at", "Belçika": "be",
+  "Beyaz Rusya": "by", "Birleşik Krallık": "gb", "Bosna-Hersek": "ba", "Bulgaristan": "bg",
+  "Danimarka": "dk", "Estonya": "ee", "Finlandiya": "fi", "Fransa": "fr", "Hırvatistan": "hr",
+  "Hollanda": "nl", "İrlanda": "ie", "İspanya": "es", "İsveç": "se", "İsviçre": "ch",
+  "İtalya": "it", "İzlanda": "is", "Karadağ": "me", "Kosova": "xk", "Letonya": "lv",
+  "Lihtenştayn": "li", "Litvanya": "lt", "Lüksemburg": "lu", "Macaristan": "hu",
+  "Kuzey Makedonya": "mk", "Malta": "mt", "Moldova": "md", "Monako": "mc", "Norveç": "no",
+  "Polonya": "pl", "Portekiz": "pt", "Romanya": "ro", "Rusya": "ru", "San Marino": "sm",
+  "Sırbistan": "rs", "Slovakya": "sk", "Slovenya": "si", "Türkiye": "tr", "Ukrayna": "ua",
+  "Vatikan": "va", "Yunanistan": "gr", "Afganistan": "af", "Azerbaycan": "az", "Bahreyn": "bh",
+  "Bangladeş": "bd", "Bhutan": "bt", "Birleşik Arap Emirlikleri": "ae", "Myanmar": "mm",
+  "Brunei": "bn", "Çin": "cn", "Endonezya": "id", "Ermenistan": "am", "Filipinler": "ph",
+  "Güney Kore": "kr", "Gürcistan": "ge", "Hindistan": "in", "Irak": "iq", "İran": "ir",
+  "İsrail": "il", "Japonya": "jp", "Kamboçya": "kh", "Katar": "qa", "Kazakistan": "kz",
+  "Kırgızistan": "kg", "Kuveyt": "kw", "Kuzey Kore": "kp", "Laos": "la", "Lübnan": "lb",
+  "Maldivler": "mv", "Malezya": "my", "Moğolistan": "mn", "Nepal": "np", "Özbekistan": "uz",
+  "Pakistan": "pk", "Singapur": "sg", "Sri Lanka": "lk", "Suriye": "sy", "Suudi Arabistan": "sa",
+  "Tacikistan": "tj", "Tayland": "th", "Tayvan": "tw", "Doğu Timor": "tl", "Türkmenistan": "tm",
+  "Umman": "om", "Ürdün": "jo", "Vietnam": "vn", "Yemen": "ye", "Angola": "ao", "Benin": "bj",
+  "Botsvana": "bw", "Burkina Faso": "bf", "Burundi": "bi", "Yeşil Burun Adaları": "cv",
+  "Çad": "td", "Cezayir": "dz", "Cibuti": "dj", "Kongo Demokratik Cumhuriyeti": "cd",
+  "Ekvator Ginesi": "gq", "Eritre": "er", "Esvatini": "sz", "Etiyopya": "et", "Fas": "ma",
+  "Fildişi Sahili": "ci", "Gabon": "ga", "Gambiya": "gm", "Gana": "gh", "Gine-Bissau": "gw",
+  "Gine": "gn", "Güney Afrika": "za", "Güney Sudan": "ss", "Kamerun": "cm", "Kenya": "ke",
+  "Komorlar": "km", "Kongo Cumhuriyeti": "cg", "Lesotho": "ls", "Liberya": "lr", "Libya": "ly",
+  "Madagaskar": "mg", "Malavi": "mw", "Mali": "ml", "Mauritius": "mu", "Mısır": "eg",
+  "Moritanya": "mr", "Mozambik": "mz", "Namibya": "na", "Nijer": "ne", "Nijerya": "ng",
+  "Orta Afrika Cumhuriyeti": "cf", "Ruanda": "rw", "São Tomé ve Príncipe": "st",
+  "Senegal": "sn", "Seyşeller": "sc", "Sierra Leone": "sl", "Somali": "so", "Sudan": "sd",
+  "Tanzanya": "tz", "Togo": "tg", "Tunus": "tn", "Uganda": "ug", "Zambiya": "zm",
+  "Zimbabve": "zw", "Antigua ve Barbuda": "ag", "Bahamalar": "bs", "Barbados": "bb",
+  "Belize": "bz", "Amerika Birleşik Devletleri": "us", "Dominik Cumhuriyeti": "do",
+  "Dominika": "dm", "El Salvador": "sv", "Grenada": "gd", "Guatemala": "gt", "Haiti": "ht",
+  "Honduras": "hn", "Jamaika": "jm", "Kanada": "ca", "Kosta Rika": "cr", "Küba": "cu",
+  "Meksika": "mx", "Nikaragua": "ni", "Panama": "pa", "Saint Kitts ve Nevis": "kn",
+  "Saint Lucia": "lc", "Saint Vincent ve Grenadinler": "vc", "Trinidad ve Tobago": "tt",
+  "Arjantin": "ar", "Bolivya": "bo", "Brezilya": "br", "Ekvador": "ec", "Guyana": "gy",
+  "Kolombiya": "co", "Paraguay": "py", "Peru": "pe", "Şili": "cl", "Surinam": "sr",
+  "Uruguay": "uy", "Venezuela": "ve", "Avustralya": "au", "Fiji": "fj", "Kiribati": "ki",
+  "Marshall Adaları": "mh", "Mikronezya": "fm", "Nauru": "nr", "Palau": "pw",
+  "Papua Yeni Gine": "pg", "Samoa": "ws", "Solomon Adaları": "sb", "Tonga": "to",
+  "Tuvalu": "tv", "Vanuatu": "vu", "Yeni Zelanda": "nz", "Çekya": "cz", "Kıbrıs": "cy",
+  "Kuzey Kıbrıs Türk Cumhuriyeti": "kktc"
+};
+
+function getFlagCode(name) {
+  return FLAG_MAP[name] || 'unknown';
+}
+
 // Alias map: normalized alias → canonical name
 const ALIASES = {
   'kktc': 'Kuzey Kıbrıs Türk Cumhuriyeti',
@@ -295,6 +361,30 @@ const ALIASES = {
   'kibris cumhuriyeti': 'Kıbrıs',
 };
 
+let timeLeft = 1800; // 30 dakika * 60 saniye
+const timerDisplay = document.getElementById('timer');
+
+function startTimer() {
+  const timerInterval = setInterval(() => {
+    timeLeft--;
+    
+    // Dakika ve saniyeyi hesapla
+    const minutes = Math.floor(timeLeft / 60);
+    const seconds = timeLeft % 60;
+    
+    // Ekrana yazdır (Saniyeyi 05 gibi göstermek için padStart kullanıyoruz)
+    timerDisplay.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    
+    if (timeLeft <= 0) {
+      clearInterval(timerInterval);
+      alert("Süren doldu!");
+      // İstersen burada oyunu durduracak fonksiyonu çağırabilirsin
+    }
+  }, 1000);
+}
+
+// Oyunu başlattığın yerin içine startTimer() ekle
+startTimer();
 let zoomLevel = 0;
 let panX = 0, panY = 0, baseScale = 1;
 let zoomedPanX = 0, zoomedPanY = 0, zoomedScale = 1;
@@ -472,7 +562,18 @@ showRemainingBtn.addEventListener('click', () => {
 function onCountryHover(e) {
   const name = e.currentTarget.dataset.name;
   if (!guessed.has(name)) return;
-  tooltip.textContent = name;
+
+  const code = getFlagCode(name);
+  
+  tooltip.innerHTML = `
+    <div style="margin-bottom: 6px; font-weight:bold;">${name}</div>
+    <img src="https://flagcdn.com/w80/${code}.png" 
+         srcset="https://flagcdn.com/w160/${code}.png 2x" 
+         width="80" 
+         alt="${name}" 
+         style="display:block; border: 1px solid #334155; border-radius: 4px; image-rendering: -webkit-optimize-contrast;">
+  `;
+  
   tooltip.style.display = 'block';
   positionTooltip(e);
 }

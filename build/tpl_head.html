@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#04060f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Dünya Ülkeleri">
+<title>Dünya Ülkeleri Oyunu — 3B Küre</title>
+<!--
+  ============================================================================
+  DÜNYA ÜLKELERİ OYUNU — 3B KÜRE SÜRÜMÜ
+  ----------------------------------------------------------------------------
+  • 3B model  : globe.gl (WebGL) — NASA Blue Marble uydu dokusu,
+                ETOPO tabanlı kabartma (yükselti) haritası,
+                WGS84 elipsoit basıklığı (1/298,257) uygulanır.
+                (Jeoit dalgalanmaları ±100 m olduğundan görsel eşiğin
+                altındadır; kabartma dokusuyla yükseltiler gösterilir.)
+  • Sınırlar  : Natural Earth 1:50m (çalışma anında CDN'den yüklenir,
+                küresel Visvalingam yöntemiyle uyarlanabilir sadeleştirilir;
+                küçük ülkeler tam çözünürlükte korunur). Kıbrıs ve KKTC de
+                aynı kaynaktan gelir (kara sınırları, Yeşil Hat hizalı).
+  • Bayraklar : flagcdn.com (KKTC bayrağı gömülü SVG).
+  • Kod düzeni: BÖLÜM 0..10 başlıkları altında gruplanmıştır (aşağıda).
+  • Not       : Oyun internet bağlantısı gerektirir (doku + sınır verisi).
+  ============================================================================
+-->
+<style>
+  /* ==========================================================================
+     GENEL YERLEŞİM
+     ========================================================================== */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: #04060f; color: #e2e8f0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    overflow: hidden;
+  }
+  button { font-family: inherit; }
+
+  /* 3B küre tuvali her zaman tam ekrandır; paneller ÜSTÜNE biner.
+     Böylece panel açılıp kapanınca tuval yeniden boyutlanmaz →
+     eski sürümdeki "liste açılınca harita bulanıklaşması" kökten çözülür.
+     (Bulanıklığa yol açan backdrop-filter da hiçbir panelde kullanılmaz.) */
+  #globe { position: fixed; inset: 0; }
+  #globe canvas { display: block; }
+
+  /* ==========================================================================
+     ÜST BİLGİ ÇUBUĞU
+     ========================================================================== */
+  #header {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 40;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 8px 14px;
+    background: rgba(15, 23, 42, 0.92);
+    border-bottom: 1px solid #334155;
+  }
+  #header h1 { font-size: 1rem; font-weight: 700; color: #38bdf8; letter-spacing: .05em; white-space: nowrap; }
+  #header-center { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  #progress { font-size: .85rem; color: #94a3b8; white-space: nowrap; }
+  #progress span { color: #38bdf8; font-weight: 700; }
+  #timer-box {
+    background: #064e3b; border: 1px solid #065f46; border-radius: 6px;
+    padding: 3px 10px; font-size: .8rem; color: #6ee7b7; font-weight: 700; white-space: nowrap;
+  }
+  #timer-box.warn { background: #7c2d12; border-color: #9a3412; color: #fdba74; }
+  #wrong-count {
+    background: #7f1d1d; border: 1px solid #991b1b; border-radius: 6px;
+    padding: 3px 10px; font-size: .8rem; color: #fca5a5; white-space: nowrap;
+  }
+  #wrong-count span { font-weight: 700; color: #f87171; }
+  #zoom-controls { display: flex; gap: 6px; align-items: center; }
+  .zoom-btn-hdr {
+    background: #1e3a5f; border: 1px solid #334155; color: #94a3b8;
+    width: 28px; height: 28px; border-radius: 6px; cursor: pointer; font-size: 1rem;
+    display: flex; align-items: center; justify-content: center; transition: all .15s;
+  }
+  .zoom-btn-hdr:hover { background: #2d5a8e; color: #e2e8f0; }
+  #zoom-level-label { font-size: .72rem; color: #64748b; white-space: nowrap; min-width: 58px; text-align: right; }
+
+  /* ==========================================================================
+     EKRAN-SABİT İŞARETÇİLER ("Kalanları göster")
+     Boyut CSS pikseliyle sabittir; yakınlaşma/uzaklaşma ne olursa olsun
+     BÜYÜMEZ — ülkenin üzerini kapatmaz. Konumu her karede yeniden izdüşümle
+     hesaplanır, kürenin arka yüzünde kalanlar gizlenir.
+     ========================================================================== */
+  #markers-layer {
+    position: fixed; inset: 0; z-index: 30; pointer-events: none; overflow: hidden;
+  }
+  .remain-marker {
+    position: absolute; width: 20px; height: 20px; margin: -10px 0 0 -10px;
+    border-radius: 50%; pointer-events: auto; cursor: pointer;
+    background: rgba(249, 115, 22, .92); border: 2px solid #ffedd5;
+    color: #431407; font-size: 12px; font-weight: 800; line-height: 16px; text-align: center;
+    box-shadow: 0 0 6px rgba(249, 115, 22, .8);
+    transition: transform .12s;
+    user-select: none;
+  }
+  .remain-marker:hover { transform: scale(1.25); z-index: 5; }
+
+  /* ==========================================================================
+     ALT BUTONLAR & İPUCU SATIRI
+     ========================================================================== */
+  #show-remaining-btn {
+    position: fixed; bottom: 14px; left: 14px; z-index: 45;
+    background: rgba(30, 41, 59, .95); border: 1px solid #475569; color: #94a3b8;
+    padding: 7px 13px; border-radius: 8px; cursor: pointer; font-size: .78rem;
+    display: flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px #0005; transition: all .15s;
+  }
+  #show-remaining-btn:hover { background: #273548; color: #e2e8f0; border-color: #64748b; }
+  #show-remaining-btn.active { background: #431407; border-color: #ea580c; color: #fdba74; }
+  #show-remaining-btn .dot-icon { width: 9px; height: 9px; border-radius: 50%; background: #f97316; flex-shrink: 0; }
+  #map-hint {
+    position: fixed; bottom: 52px; left: 14px; font-size: .68rem; color: #475569;
+    pointer-events: none; z-index: 25; line-height: 1.5;
+  }
+
+  /* ==========================================================================
+     TAHMİN PANELİ
+     ========================================================================== */
+  #guess-panel {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: rgba(30, 41, 59, .97); border: 1px solid #334155; border-radius: 12px;
+    padding: 14px 18px; min-width: 340px; max-width: 92vw;
+    box-shadow: 0 8px 32px #000a; display: none; z-index: 60;
+  }
+  #guess-panel.visible { display: block; }
+  #guess-country-hint { font-size: .75rem; color: #94a3b8; margin-bottom: 8px; text-align: center; }
+  #guess-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #guess-input {
+    flex: 1; min-width: 150px; background: #0f172a; border: 1px solid #475569; border-radius: 8px;
+    color: #e2e8f0; padding: 8px 12px; font-size: .9rem; outline: none;
+  }
+  #guess-input:focus { border-color: #38bdf8; }
+  #guess-input.wrong { border-color: #ef4444; animation: shake .3s; }
+  #guess-input.correct { border-color: #4ade80; background: #052e16; }
+  @keyframes shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+  #guess-btn { background: #0284c7; border: none; color: #fff; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: .85rem; font-weight: 600; }
+  #guess-btn:hover { background: #0369a1; }
+  #hint-btn, #skip-btn {
+    background: transparent; border: 1px solid #475569; color: #94a3b8;
+    padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: .8rem;
+  }
+  #hint-btn:hover, #skip-btn:hover { color: #e2e8f0; border-color: #64748b; }
+  #show-answer-btn { background: #16a34a; border: none; color: #fff; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: .8rem; display: none; }
+  #show-answer-btn:hover { background: #15803d; }
+  #guess-feedback { text-align: center; font-size: .78rem; margin-top: 8px; min-height: 16px; color: #ef4444; }
+  #guess-feedback.ok { color: #4ade80; }
+
+  /* ==========================================================================
+     ÜLKE BİLGİ KARTI (bayrağın altında eğitici bilgiler)
+     ========================================================================== */
+  #info-card {
+    position: fixed; top: 64px; left: 14px; z-index: 55; width: 250px;
+    background: rgba(15, 23, 42, .96); border: 1px solid #334155; border-radius: 14px;
+    box-shadow: 0 10px 36px #000b; display: none; overflow: hidden;
+  }
+  #info-card.visible { display: block; animation: cardIn .25s ease-out; }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+  #info-flag-wrap { position: relative; background: #0b1220; text-align: center; padding: 14px 12px 10px; border-bottom: 1px solid #1e293b; }
+  #info-flag { width: 150px; max-width: 80%; border-radius: 6px; border: 1px solid #334155; box-shadow: 0 4px 14px #0008; display: inline-block; }
+  #info-close {
+    position: absolute; top: 6px; right: 8px; background: none; border: none;
+    color: #64748b; font-size: 1rem; cursor: pointer; padding: 2px 6px; border-radius: 4px;
+  }
+  #info-close:hover { color: #e2e8f0; background: #334155; }
+  #info-correct-badge { display: none; font-size: .72rem; color: #4ade80; font-weight: 700; margin-bottom: 6px; letter-spacing: .04em; }
+  #info-card.just-guessed #info-correct-badge { display: block; }
+  #info-name { font-size: 1.02rem; font-weight: 700; color: #e2e8f0; margin-top: 8px; }
+  #info-rows { padding: 10px 14px 12px; }
+  .info-row { display: flex; gap: 8px; padding: 5px 0; font-size: .78rem; border-bottom: 1px dashed #1e293b; }
+  .info-row:last-child { border-bottom: none; }
+  .info-row .k { color: #64748b; min-width: 82px; flex-shrink: 0; }
+  .info-row .v { color: #cbd5e1; font-weight: 600; }
+
+  /* ==========================================================================
+     FARE İPUCU KUTUSU (tooltip)
+     ========================================================================== */
+  #country-tooltip {
+    position: fixed; pointer-events: none; z-index: 70;
+    background: rgba(15, 23, 42, .95); border: 1px solid #334155; border-radius: 8px;
+    padding: 7px 10px; font-size: .8rem; color: #e2e8f0; display: none;
+    transform: translate(-50%, -130%); text-align: center; box-shadow: 0 4px 12px #0008;
+    white-space: nowrap;
+  }
+  #country-tooltip img { display: block; margin: 4px auto 0; border: 1px solid #334155; border-radius: 4px; width: 72px; }
+  #country-tooltip .tip-sub { color: #94a3b8; font-size: .68rem; margin-top: 3px; }
+
+  /* ==========================================================================
+     KENAR ÇUBUĞU (ülke listesi + başarımlar) — tuvalin üstüne kayar,
+     tuvali YENİDEN BOYUTLANDIRMAZ (bulanıklık düzeltmesinin parçası).
+     ========================================================================== */
+  #sidebar {
+    position: fixed; top: 49px; right: 0; bottom: 0; width: 250px; z-index: 50;
+    background: rgba(15, 23, 42, .95); border-left: 1px solid #334155;
+    display: flex; flex-direction: column;
+    transform: translateX(100%); transition: transform .25s ease;
+  }
+  #sidebar.open { transform: translateX(0); }
+  #sidebar-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; border-bottom: 1px solid #334155; flex-shrink: 0;
+  }
+  #sidebar-title { font-size: .75rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .08em; }
+  #sidebar-close { background: none; border: none; color: #475569; cursor: pointer; font-size: 1rem; padding: 2px 4px; border-radius: 4px; }
+  #sidebar-close:hover { color: #e2e8f0; background: #334155; }
+  #sidebar-toggle {
+    position: fixed; right: 0; top: 50%; transform: translateY(-50%); z-index: 49;
+    background: rgba(30, 41, 59, .95); border: 1px solid #334155; border-right: none;
+    color: #64748b; cursor: pointer; padding: 10px 6px; border-radius: 8px 0 0 8px;
+    font-size: .7rem; writing-mode: vertical-rl; letter-spacing: .05em;
+  }
+  #sidebar-toggle:hover { color: #e2e8f0; background: #273548; }
+  #sidebar.open ~ #sidebar-toggle { display: none; }
+  #country-list { flex: 1; overflow-y: auto; padding: 8px 0; }
+  #country-list::-webkit-scrollbar { width: 4px; }
+  #country-list::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+  .continent-group { margin-bottom: 4px; }
+  .continent-label {
+    padding: 6px 12px 4px; font-size: .7rem; font-weight: 700; letter-spacing: .07em;
+    text-transform: uppercase; color: #7dd3fc; position: sticky; top: 0;
+    background: rgba(15, 23, 42, .98); border-bottom: 1px solid #1e293b;
+    cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+  }
+  .continent-label:hover { background: #1a2740; }
+  .cont-prog { font-size: .65rem; color: #38bdf8; }
+  .continent-items { display: none; }
+  .continent-items.open { display: block; }
+  .country-item {
+    padding: 3px 14px; font-size: .75rem; color: #3f4d63;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .country-item.guessed { color: #4ade80; cursor: pointer; transition: color .1s; }
+  .country-item.guessed:hover { color: #86efac; text-decoration: underline; }
+  .country-item.guessed::before { content: "✓ "; }
+  .country-item.list-highlighted { color: #f87171 !important; }
+  .country-item.list-highlighted::before { content: "● "; }
+  #achievements-container { padding: 10px; border-top: 1px solid #334155; background: rgba(2, 6, 23, .6); flex-shrink: 0; }
+  #achievements-title { font-size: .7rem; color: #94a3b8; margin-bottom: 5px; text-transform: uppercase; }
+  #achievements-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
+  .ach-icon {
+    width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    background: #1e293b; border-radius: 6px; font-size: 1rem; cursor: help; position: relative;
+  }
+  .ach-icon::after {
+    content: attr(data-tooltip); position: absolute; bottom: 110%; right: 0;
+    background: #000; color: #fff; padding: 4px 8px; font-size: .7rem; border-radius: 4px;
+    white-space: nowrap; display: none; pointer-events: none; z-index: 10;
+  }
+  .ach-icon:hover::after { display: block; }
+
+  /* ==========================================================================
+     BAŞARIM BİLDİRİMİ (toast)
+     ========================================================================== */
+  #achievement-toast {
+    position: fixed; top: 60px; left: 16px; z-index: 90;
+    background: #fbbf24; color: #451a03; padding: 10px 16px; border-radius: 8px;
+    font-weight: bold; font-size: .85rem; box-shadow: 0 4px 12px #0006;
+    transform: translateX(-150%); transition: transform .4s cubic-bezier(.4, 0, .2, 1);
+    pointer-events: none;
+  }
+  #achievement-toast.show { transform: translateX(0); }
+  #toast-name { font-weight: normal; color: #78350f; font-size: .75rem; }
+
+  /* ==========================================================================
+     TAM EKRAN KAPLAMALAR: yükleme / başlangıç / oyun sonu
+     ========================================================================== */
+  .overlay {
+    position: fixed; inset: 0; z-index: 100; display: none;
+    align-items: center; justify-content: center; background: rgba(2, 6, 23, .88);
+  }
+  .overlay.visible { display: flex; }
+  .overlay-box {
+    background: #0f172a; border: 1px solid #334155; border-radius: 16px;
+    padding: 32px 38px; text-align: center; max-width: 430px; width: 92vw;
+    box-shadow: 0 20px 60px #000c; position: relative;
+  }
+  .overlay-box h2 { font-size: 1.7rem; margin-bottom: 8px; }
+  .overlay-box p { color: #94a3b8; font-size: .88rem; line-height: 1.55; }
+  .overlay-close { position: absolute; top: 10px; right: 12px; border: none; background: none; color: #64748b; cursor: pointer; font-size: 1rem; }
+  .overlay-close:hover { color: #e2e8f0; }
+  .primary-btn {
+    background: #0284c7; border: none; color: #fff; padding: 11px 26px; border-radius: 9px;
+    cursor: pointer; font-size: .95rem; font-weight: 700; margin: 6px 4px 0;
+  }
+  .primary-btn:hover { background: #0369a1; }
+  .secondary-btn {
+    background: transparent; border: 1px solid #475569; color: #cbd5e1; padding: 11px 22px;
+    border-radius: 9px; cursor: pointer; font-size: .9rem; margin: 6px 4px 0;
+  }
+  .secondary-btn:hover { border-color: #94a3b8; }
+  #loading-status { margin-top: 14px; color: #38bdf8; font-size: .8rem; min-height: 18px; }
+  #loading-bar-wrap { margin-top: 12px; height: 6px; background: #1e293b; border-radius: 3px; overflow: hidden; }
+  #loading-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #0284c7, #38bdf8); transition: width .3s; }
+  .spin { display: inline-block; animation: spin 1.6s linear infinite; font-size: 2rem; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #model-note {
+    margin-top: 14px; text-align: left; font-size: .72rem; color: #64748b;
+    border: 1px dashed #334155; border-radius: 8px; padding: 8px 10px;
+  }
+  #model-note summary { cursor: pointer; color: #7dd3fc; font-size: .76rem; }
+  #model-note p { font-size: .72rem; margin-top: 6px; color: #94a3b8; }
+  #start-error { color: #f87171; font-size: .8rem; margin-top: 10px; display: none; }
+  #export-row { margin-top: 14px; font-size: .72rem; color: #475569; }
+  #export-link { color: #38bdf8; cursor: pointer; text-decoration: underline; }
+  #win-box h2 { color: #4ade80; }
+  #timeup-box h2 { color: #fbbf24; }
+
+  /* ==========================================================================
+     BAŞLANGIÇ EKRANI — coğrafi, ferah, kürenin dönüşü arkada görünür
+     (backdrop-filter YOK: bulanıklık sorunu geri gelmesin)
+     ========================================================================== */
+  .overlay.start-overlay {
+    background: radial-gradient(ellipse at 50% 42%, rgba(2, 6, 23, 0.10) 0%, rgba(2, 6, 23, 0.55) 62%, rgba(2, 6, 23, 0.82) 100%);
+  }
+  #start-box {
+    max-width: 490px; padding: 26px 30px 20px;
+    background: rgba(10, 16, 34, 0.88);
+    border: 1px solid #1e3a5f;
+    box-shadow: 0 24px 70px #000d, 0 0 0 1px #0ea5e922 inset;
+  }
+  #start-kicker {
+    font-size: .66rem; font-weight: 800; letter-spacing: .35em;
+    color: #0ea5e9; margin-bottom: 4px;
+  }
+  #start-title { font-size: 1.85rem; color: #e8f4ff; margin-bottom: 12px; }
+  #start-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-bottom: 16px; }
+  .chip {
+    font-size: .7rem; color: #93c5fd; background: #0f223f;
+    border: 1px solid #1e3a5f; border-radius: 999px; padding: 4px 11px; white-space: nowrap;
+  }
+  .chip b { color: #e2e8f0; }
+  #start-steps {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px;
+  }
+  .step {
+    background: #0d1830; border: 1px solid #16294a; border-radius: 10px;
+    padding: 10px 8px; display: flex; flex-direction: column; gap: 3px; align-items: center;
+  }
+  .step-icon { font-size: 1.25rem; }
+  .step b { font-size: .74rem; color: #cbd5e1; }
+  .step small { font-size: .64rem; color: #64748b; line-height: 1.35; }
+  #mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .mode-card {
+    border-radius: 12px; padding: 13px 10px 11px; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    transition: transform .12s, box-shadow .12s, border-color .12s;
+  }
+  .mode-card b { font-size: .92rem; color: #f1f5f9; }
+  .mode-card small { font-size: .68rem; color: #94a3b8; }
+  .mode-icon { font-size: 1.45rem; margin-bottom: 2px; }
+  .mode-card.timed { background: linear-gradient(160deg, #0c2f52, #0a1c38); border: 1px solid #0284c7; }
+  .mode-card.free { background: linear-gradient(160deg, #0b3a33, #0a1f2e); border: 1px solid #0d9488; }
+  .mode-card:hover { transform: translateY(-2px); box-shadow: 0 8px 22px #0009; }
+  .mode-card.timed:hover { border-color: #38bdf8; }
+  .mode-card.free:hover { border-color: #2dd4bf; }
+  #start-trivia {
+    margin-top: 14px; font-size: .74rem; color: #fbbf24; min-height: 32px;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    background: #1c150533; border: 1px dashed #78350f88; border-radius: 8px; padding: 6px 12px;
+  }
+  #trivia-text { transition: opacity .25s; color: #fcd34d; }
+
+  /* Künyedeki alfabe örneği */
+  .script-sample {
+    margin-top: 2px; font-size: .95rem; color: #7dd3fc; letter-spacing: .04em; line-height: 1.3;
+  }
+  /* Yerel ad (endonim): Türkçe adın altında, kendi alfabesiyle */
+  #info-native { font-size: .8rem; color: #94a3b8; margin-top: 2px; line-height: 1.35; }
+
+  /* ==========================================================================
+     ⚔️ DÜELLO MODU
+     ========================================================================== */
+  #mp-bar {
+    position: fixed; top: 52px; left: 50%; transform: translateX(-50%); z-index: 44;
+    display: none; align-items: center; gap: 10px;
+    background: rgba(15, 23, 42, 0.93); border: 1px solid #334155; border-radius: 12px;
+    padding: 6px 12px; box-shadow: 0 6px 20px #0008;
+  }
+  .mp-player {
+    display: flex; align-items: center; gap: 7px; padding: 4px 11px;
+    border-radius: 8px; border: 1px solid #334155; background: #0d1830;
+    transition: all .2s; opacity: .65;
+  }
+  .mp-player.active {
+    border-color: #f59e0b; opacity: 1;
+    box-shadow: 0 0 10px #f59e0b55; background: #1c1502;
+  }
+  .mp-pname { font-size: .72rem; color: #94a3b8; font-weight: 700; }
+  .mp-player.active .mp-pname { color: #fbbf24; }
+  .mp-score { font-size: .95rem; font-weight: 800; color: #e2e8f0; }
+  .mp-streak { font-size: .7rem; color: #fb923c; min-width: 0; }
+  #mp-mid { display: flex; flex-direction: column; align-items: center; font-size: 1rem; }
+  #mp-remaining { font-size: .58rem; color: #64748b; white-space: nowrap; }
+  #mp-legend { display: none; text-align: center; font-size: .66rem; color: #64748b; margin-top: 7px; }
+  #duel-rules { border: 1px solid #334155; border-radius: 10px; overflow: hidden; }
+  #duel-rules .rule {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 13px; font-size: .78rem; color: #cbd5e1; border-bottom: 1px solid #1e293b;
+  }
+  #duel-rules .rule:last-child { border-bottom: none; }
+  #duel-rules .rule:nth-child(odd) { background: #0d1830; }
+  #duel-rules b.pos { color: #4ade80; }
+  #duel-rules b.neg { color: #f87171; }
+  .mode-card.duel { background: linear-gradient(160deg, #3b2404, #1c1208); border: 1px solid #b45309; }
+  .mode-card.duel:hover { border-color: #f59e0b; }
+  #duel-online-panel { margin-top: 12px; border: 1px solid #1e3a5f; border-radius: 10px; padding: 10px; background: #0a1428; }
+  .net-input {
+    background: #0f172a; border: 1px solid #475569; border-radius: 8px; color: #e2e8f0;
+    padding: 8px 10px; font-size: .84rem; outline: none; width: 100%;
+  }
+  .net-input:focus { border-color: #38bdf8; }
+  #duel-nick { margin-bottom: 8px; }
+  #duel-net-rows { display: grid; grid-template-columns: 1fr 1.4fr; gap: 8px; align-items: stretch; }
+  #duel-join-row { display: flex; gap: 6px; }
+  #duel-code-input { text-transform: uppercase; letter-spacing: .15em; font-weight: 700; text-align: center; }
+  #duel-net-rows .primary-btn { margin: 0; padding: 9px 10px; font-size: .82rem; white-space: nowrap; }
+  #duel-net-status { margin-top: 9px; font-size: .78rem; color: #7dd3fc; min-height: 18px; line-height: 1.45; }
+  #duel-net-status .room-code { font-size: 1.25rem; font-weight: 800; letter-spacing: .3em; color: #fbbf24; }
+  #duel-local-row { margin-top: 10px; }
+  #turn-banner {
+    position: fixed; top: 100px; left: 50%; transform: translateX(-50%); z-index: 46;
+    background: rgba(28, 21, 2, .95); border: 1px solid #b45309; color: #fcd34d;
+    border-radius: 999px; padding: 6px 16px; font-size: .78rem; display: none;
+    box-shadow: 0 6px 18px #0008; white-space: nowrap;
+  }
+  @media (max-width: 640px) {
+    #turn-banner { top: 126px; max-width: 94vw; white-space: normal; text-align: center; }
+    #duel-net-rows { grid-template-columns: 1fr; }
+  }
+  .country-item.revealed { color: #94a3b8; cursor: pointer; }
+  .country-item.revealed::before { content: "— "; }
+  .country-item.revealed:hover { color: #cbd5e1; text-decoration: underline; }
+
+  /* ==========================================================================
+     MOBİL / DOKUNMATİK UYUM (uygulama hissi)
+     ========================================================================== */
+  button, .remain-marker { touch-action: manipulation; }
+  @media (pointer: coarse) {
+    .remain-marker { width: 26px; height: 26px; margin: -13px 0 0 -13px; line-height: 22px; font-size: 14px; }
+    .zoom-btn-hdr { width: 34px; height: 34px; }
+  }
+  @media (max-width: 640px) {
+    #header { flex-wrap: wrap; padding: 6px 8px; gap: 6px; }
+    #header h1 { font-size: .82rem; }
+    #progress, #wrong-count, #timer-box { font-size: .7rem; }
+    #zoom-controls { margin-left: auto; }
+    #sidebar { width: min(80vw, 300px); }
+    #guess-panel { min-width: 0; width: calc(100vw - 16px); bottom: 8px; padding: 10px 12px; }
+    #info-card { width: 208px; top: 130px; left: 8px; max-height: calc(100vh - 230px); overflow-y: auto; }
+    #info-flag { width: 110px; }
+    #mp-bar { top: 84px; width: calc(100vw - 12px); justify-content: center; gap: 6px; padding: 5px 6px; }
+    .mp-player { padding: 3px 8px; }
+    #map-hint { display: none; }
+    #start-box { padding: 18px 14px 14px; max-height: 94vh; overflow-y: auto; }
+    #start-title { font-size: 1.45rem; }
+    #mode-cards { grid-template-columns: 1fr; }
+    #start-steps { gap: 5px; }
+    .step small { display: none; }
+    #show-remaining-btn { bottom: auto; top: 130px; right: 8px; left: auto; }
+  }
+</style>
+</head>
+<body>
+
+<!-- 3B KÜRE TUVALİ -->
+<div id="globe"></div>
+
+<!-- EKRAN-SABİT İŞARETÇİ KATMANI -->
+<div id="markers-layer"></div>
+
+<!-- ÜST BİLGİ ÇUBUĞU -->
+<div id="header">
+  <h1>🌍 Dünya Ülkeleri — 3B</h1>
+  <div id="header-center">
+    <div id="progress">İlerleme: <span id="prog-count">0</span> / <span class="js-total">…</span></div>
+    <div id="wrong-count">Yanlış: <span id="wrong-num">0</span></div>
+    <div id="timer-box" style="display:none">⏱ <span id="timer">30:00</span></div>
+  </div>
+  <div id="zoom-controls">
+    <span id="zoom-level-label">Genel</span>
+    <button class="zoom-btn-hdr" id="btn-zoom-out" title="Uzaklaş">−</button>
+    <button class="zoom-btn-hdr" id="btn-zoom-in" title="Yakınlaş">+</button>
+  </div>
+</div>
+
+<!-- BAŞARIM BİLDİRİMİ -->
+<div id="achievement-toast">Başarım Kazanıldı!<br><span id="toast-name"></span></div>
+
+<!-- ⚔️ DÜELLO SKOR ÇUBUĞU -->
+<div id="mp-bar">
+  <div class="mp-player" id="mp-p0">
+    <span class="mp-pname">1. Oyuncu</span><span class="mp-score">1000</span><span class="mp-streak"></span>
+  </div>
+  <div id="mp-mid">⚔️<span id="mp-remaining"></span></div>
+  <div class="mp-player" id="mp-p1">
+    <span class="mp-pname">2. Oyuncu</span><span class="mp-score">1000</span><span class="mp-streak"></span>
+  </div>
+</div>
+
+<!-- FARE İPUCU KUTUSU -->
+<div id="country-tooltip"></div>
+
+<!-- ÜLKE BİLGİ KARTI -->
+<div id="info-card">
+  <div id="info-flag-wrap">
+    <button id="info-close" title="Kapat">✕</button>
+    <div id="info-correct-badge">✓ DOĞRU BİLDİN!</div>
+    <img id="info-flag" alt="Bayrak" src="">
+    <div id="info-name"></div>
+    <div id="info-native"></div>
+  </div>
+  <div id="info-rows"></div>
+</div>
+
+<!-- KALANLARI GÖSTER BUTONU + KAYNAK NOTU -->
+<button id="show-remaining-btn"><span class="dot-icon"></span> Kalanları göster</button>
+<div id="map-hint">
+  Ülke Bulma Oyunu 2026 · linkedin.com/in/melihmavi<br>
+  Sınırlar: Natural Earth · Doku: NASA Blue Marble · Bayraklar: FlagCDN · 3B: globe.gl
+</div>
+
+<!-- TAHMİN PANELİ -->
+<div id="guess-panel">
+  <div id="guess-country-hint">Bu ülkeyi biliyor musun?</div>
+  <div id="guess-row">
+    <input id="guess-input" type="text" placeholder="Ülke adını gir..." autocomplete="off" />
+    <button id="guess-btn">Tahmin</button>
+    <button id="hint-btn" title="İlk harf ve harf sayısı ipucu">💡</button>
+    <button id="skip-btn">Vazgeç</button>
+    <button id="show-answer-btn">Cevabı Göster</button>
+  </div>
+  <div id="guess-feedback"></div>
+  <div id="mp-legend">✓ Doğru +50 · ✗ Yanlış −25 · 💡 İpucu −20 · Pas −100</div>
+</div>
+
+<!-- KENAR ÇUBUĞU -->
+<div id="sidebar">
+  <div id="sidebar-header">
+    <div id="sidebar-title">Ülkeler</div>
+    <button id="sidebar-close" title="Gizle">✕</button>
+  </div>
+  <div id="country-list"></div>
+  <div id="achievements-container">
+    <div id="achievements-title">Başarımlar</div>
+    <div id="achievements-grid"></div>
+  </div>
+</div>
+<button id="sidebar-toggle">Liste</button>
+
+<!-- YÜKLEME EKRANI -->
+<div id="loading-overlay" class="overlay visible">
+  <div class="overlay-box">
+    <span class="spin">🌍</span>
+    <h2 style="color:#38bdf8">Dünya hazırlanıyor…</h2>
+    <div id="loading-bar-wrap"><div id="loading-bar"></div></div>
+    <div id="loading-status">Kütüphaneler yükleniyor…</div>
+  </div>
+</div>
+
+<!-- BAŞLANGIÇ EKRANI — yarı saydamdır: arkada küre dönmeye devam eder -->
+<div id="start-overlay" class="overlay start-overlay">
+  <div class="overlay-box" id="start-box">
+    <div id="start-kicker">3B COĞRAFYA OYUNU</div>
+    <h2 id="start-title">🌍 Dünya Ülkeleri</h2>
+    <div id="start-chips">
+      <span class="chip">🗺 <b class="js-total">…</b> ülke</span>
+      <span class="chip">🧭 6 kıta</span>
+      <span class="chip">🛰 Gerçek uydu dokusu</span>
+      <span class="chip">⛰ Kabartmalı yükselti</span>
+    </div>
+    <div id="start-steps">
+      <div class="step"><span class="step-icon">🖱️</span><b>Çevir &amp; tıkla</b><small>Küreyi döndür, bir ülke seç</small></div>
+      <div class="step"><span class="step-icon">⌨️</span><b>Adını yaz</b><small>Takılırsan 💡 ipucu al</small></div>
+      <div class="step"><span class="step-icon">🚩</span><b>Künyeyi kazan</b><small>Bayrak, başkent, alfabe…</small></div>
+    </div>
+    <div id="mode-cards">
+      <button id="mode-timed" class="mode-card timed">
+        <span class="mode-icon">⏱</span><b>Süreli Yarış</b><small>30 dakika · rekorunu dene</small>
+      </button>
+      <button id="mode-free" class="mode-card free">
+        <span class="mode-icon">🧭</span><b>Serbest Keşif</b><small>Süre yok · öğrene öğrene</small>
+      </button>
+      <button id="mode-duel" class="mode-card duel">
+        <span class="mode-icon">⚔️</span><b>2 Kişilik Düello</b><small>🌐 Çevrimiçi (oda koduyla) veya aynı cihazda</small>
+      </button>
+    </div>
+    <div id="start-trivia">💡 <span id="trivia-text"></span></div>
+    <details id="model-note">
+      <summary>🛰 Bu dünya modeli hakkında (eğitici not)</summary>
+      <p>Küre, Dünya'nın gerçek şekline en yakın matematiksel model olan
+      <b>WGS84 elipsoidi</b>ne göre kutuplardan 1/298,257 oranında basıktır.
+      Gerçek "jeoit" (deniz seviyesinin şekli) elipsoitten en fazla ±100 m sapar —
+      bu, küre ölçeğinde görülemeyecek kadar küçüktür. Dağlar ve okyanus tabanı
+      gibi <b>yükseltiler</b>, NASA/ETOPO verisinden üretilen kabartma dokusuyla
+      gösterilir. Uydu görüntüsü: NASA Blue Marble. Sınırlar: Natural Earth 1:50m.</p>
+    </details>
+    <div id="export-row">İyileştirilmiş sınır verisini indir:
+      <span id="export-link">dunya_ulkeleri.geojson ⬇</span>
+    </div>
+    <div id="start-error"></div>
+  </div>
+</div>
+
+<!-- ⚔️ DÜELLO KURULUM EKRANI (çevrimiçi oda kur/katıl + aynı cihazda) -->
+<div id="duel-overlay" class="overlay">
+  <div class="overlay-box">
+    <h2 style="color:#f59e0b">⚔️ 2 Kişilik Düello</h2>
+    <p style="margin-bottom:10px">Sırayla, oyunun seçtiği <b>rastgele ülkeyi</b> bilmeye çalışırsınız.</p>
+    <div id="duel-rules">
+      <div class="rule"><span>Başlangıç puanı</span><b>1000</b></div>
+      <div class="rule"><span>✓ Doğru bilme</span><b class="pos">+50</b></div>
+      <div class="rule"><span>✗ Yanlış deneme</span><b class="neg">−25</b></div>
+      <div class="rule"><span>💡 İpucu</span><b class="neg">−20</b></div>
+      <div class="rule"><span>Pas geçme (cevap açıklanır)</span><b class="neg">−100</b></div>
+      <div class="rule"><span>⏱ Tur süresi (çevrimiçi)</span><b class="neg">60 sn → otomatik pas</b></div>
+      <div class="rule"><span>🔥 Temiz seri 10 / 20 / 30</span><b class="pos">+500 / +1000 / +1500</b></div>
+    </div>
+    <p style="font-size:.72rem;margin-top:8px">Temiz seri: ardarda, hiç yanlışsız ve ipucusuz bilmek.
+    <b>Puanı biten kaybeder.</b> Ülkeler biterse yüksek puanlı kazanır.</p>
+
+    <div id="duel-online-panel">
+      <input id="duel-nick" class="net-input" maxlength="12" placeholder="Takma adın (isteğe bağlı)" autocomplete="off">
+      <div id="duel-net-rows">
+        <button id="duel-host-btn" class="primary-btn">🌐 Oda Kur</button>
+        <div id="duel-join-row">
+          <input id="duel-code-input" class="net-input" maxlength="5" placeholder="ODA KODU" autocomplete="off">
+          <button id="duel-join-btn" class="primary-btn">Katıl</button>
+        </div>
+      </div>
+      <div id="duel-net-status"></div>
+    </div>
+
+    <div id="duel-local-row">
+      <button id="duel-start-btn" class="secondary-btn">📱 Aynı Cihazda Başlat</button>
+      <button id="duel-cancel-btn" class="secondary-btn">Geri</button>
+    </div>
+  </div>
+</div>
+
+<!-- ÇEVRİMİÇİ DÜELLODA SIRA/DURUM ŞERİDİ -->
+<div id="turn-banner"></div>
+
+<!-- KAZANMA / DÜELLO SONU EKRANI -->
+<div id="win-overlay" class="overlay">
+  <div class="overlay-box" id="win-box">
+    <button class="overlay-close" data-close="win-overlay">✕</button>
+    <h2 id="win-title">🎉 Tebrikler!</h2>
+    <p id="win-text">Tüm <span class="js-total">…</span> ülkeyi buldun!<br><span id="win-stats"></span></p>
+    <button id="restart-btn" class="primary-btn">Yeniden Oyna</button>
+  </div>
+</div>
+
+<!-- SÜRE DOLDU EKRANI -->
+<div id="timeup-overlay" class="overlay">
+  <div class="overlay-box" id="timeup-box">
+    <button class="overlay-close" data-close="timeup-overlay">✕</button>
+    <h2>⏱ Süre Doldu!</h2>
+    <p id="timeup-stats"></p>
+    <button id="timeup-restart-btn" class="primary-btn">Yeniden Oyna</button>
+    <button id="timeup-continue-btn" class="secondary-btn">Serbest modda devam et</button>
+  </div>
+</div>

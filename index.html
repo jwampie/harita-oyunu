@@ -1,0 +1,3389 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#04060f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Dünya Ülkeleri">
+<title>Dünya Ülkeleri Oyunu — 3B Küre</title>
+<!--
+  ============================================================================
+  DÜNYA ÜLKELERİ OYUNU — 3B KÜRE SÜRÜMÜ
+  ----------------------------------------------------------------------------
+  • 3B model  : globe.gl (WebGL) — NASA Blue Marble uydu dokusu,
+                ETOPO tabanlı kabartma (yükselti) haritası,
+                WGS84 elipsoit basıklığı (1/298,257) uygulanır.
+                (Jeoit dalgalanmaları ±100 m olduğundan görsel eşiğin
+                altındadır; kabartma dokusuyla yükseltiler gösterilir.)
+  • Sınırlar  : Natural Earth 1:50m (çalışma anında CDN'den yüklenir,
+                küresel Visvalingam yöntemiyle uyarlanabilir sadeleştirilir;
+                küçük ülkeler tam çözünürlükte korunur). Kıbrıs ve KKTC de
+                aynı kaynaktan gelir (kara sınırları, Yeşil Hat hizalı).
+  • Bayraklar : flagcdn.com (KKTC bayrağı gömülü SVG).
+  • Kod düzeni: BÖLÜM 0..10 başlıkları altında gruplanmıştır (aşağıda).
+  • Not       : Oyun internet bağlantısı gerektirir (doku + sınır verisi).
+  • Katkı     : İlk 2B sürüm Melih'e (github.com/jwampie) ait —
+                https://jwampie.github.io/harita-oyunu
+  ============================================================================
+-->
+<style>
+  /* ==========================================================================
+     GENEL YERLEŞİM
+     ========================================================================== */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: #04060f; color: #e2e8f0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    overflow: hidden;
+  }
+  button { font-family: inherit; }
+
+  /* 3B küre tuvali her zaman tam ekrandır; paneller ÜSTÜNE biner.
+     Böylece panel açılıp kapanınca tuval yeniden boyutlanmaz →
+     eski sürümdeki "liste açılınca harita bulanıklaşması" kökten çözülür.
+     (Bulanıklığa yol açan backdrop-filter da hiçbir panelde kullanılmaz.) */
+  #globe { position: fixed; inset: 0; }
+  #globe canvas { display: block; }
+
+  /* ==========================================================================
+     ÜST BİLGİ ÇUBUĞU
+     ========================================================================== */
+  #header {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 40;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 8px 14px;
+    background: rgba(15, 23, 42, 0.92);
+    border-bottom: 1px solid #334155;
+  }
+  #header h1 { font-size: 1rem; font-weight: 700; color: #38bdf8; letter-spacing: .05em; white-space: nowrap; }
+  #header-center { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  #progress { font-size: .85rem; color: #94a3b8; white-space: nowrap; }
+  #progress span { color: #38bdf8; font-weight: 700; }
+  #timer-box {
+    background: #064e3b; border: 1px solid #065f46; border-radius: 6px;
+    padding: 3px 10px; font-size: .8rem; color: #6ee7b7; font-weight: 700; white-space: nowrap;
+  }
+  #timer-box.warn { background: #7c2d12; border-color: #9a3412; color: #fdba74; }
+  #wrong-count {
+    background: #7f1d1d; border: 1px solid #991b1b; border-radius: 6px;
+    padding: 3px 10px; font-size: .8rem; color: #fca5a5; white-space: nowrap;
+  }
+  #wrong-count span { font-weight: 700; color: #f87171; }
+  #free-score-box {
+    background: #052e16; border: 1px solid #14532d; border-radius: 6px;
+    padding: 3px 10px; font-size: .8rem; color: #86efac; white-space: nowrap;
+  }
+  #free-score-box span { font-weight: 700; color: #4ade80; }
+  #zoom-controls { display: flex; gap: 6px; align-items: center; }
+  .zoom-btn-hdr {
+    background: #1e3a5f; border: 1px solid #334155; color: #94a3b8;
+    width: 28px; height: 28px; border-radius: 6px; cursor: pointer; font-size: 1rem;
+    display: flex; align-items: center; justify-content: center; transition: all .15s;
+  }
+  .zoom-btn-hdr:hover { background: #2d5a8e; color: #e2e8f0; }
+  #zoom-level-label { font-size: .72rem; color: #64748b; white-space: nowrap; min-width: 58px; text-align: right; }
+
+  /* ==========================================================================
+     EKRAN-SABİT İŞARETÇİLER ("Kalanları göster")
+     Boyut CSS pikseliyle sabittir; yakınlaşma/uzaklaşma ne olursa olsun
+     BÜYÜMEZ — ülkenin üzerini kapatmaz. Konumu her karede yeniden izdüşümle
+     hesaplanır, kürenin arka yüzünde kalanlar gizlenir.
+     ========================================================================== */
+  #markers-layer {
+    position: fixed; inset: 0; z-index: 30; pointer-events: none; overflow: hidden;
+  }
+  .remain-marker {
+    position: absolute; width: 20px; height: 20px; margin: -10px 0 0 -10px;
+    border-radius: 50%; pointer-events: auto; cursor: pointer;
+    background: rgba(249, 115, 22, .92); border: 2px solid #ffedd5;
+    color: #431407; font-size: 12px; font-weight: 800; line-height: 16px; text-align: center;
+    box-shadow: 0 0 6px rgba(249, 115, 22, .8);
+    transition: transform .12s;
+    user-select: none;
+  }
+  .remain-marker:hover { transform: scale(1.25); z-index: 5; }
+
+  /* ==========================================================================
+     ALT BUTONLAR & İPUCU SATIRI
+     ========================================================================== */
+  #show-remaining-btn {
+    position: fixed; bottom: 14px; left: 14px; z-index: 45;
+    background: rgba(30, 41, 59, .95); border: 1px solid #475569; color: #94a3b8;
+    padding: 7px 13px; border-radius: 8px; cursor: pointer; font-size: .78rem;
+    display: flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px #0005; transition: all .15s;
+  }
+  #show-remaining-btn:hover { background: #273548; color: #e2e8f0; border-color: #64748b; }
+  #show-remaining-btn.active { background: #431407; border-color: #ea580c; color: #fdba74; }
+  #show-remaining-btn .dot-icon { width: 9px; height: 9px; border-radius: 50%; background: #f97316; flex-shrink: 0; }
+  #map-hint {
+    position: fixed; bottom: 90px; left: 14px; font-size: .68rem; color: #475569;
+    pointer-events: none; z-index: 25; line-height: 1.5;
+  }
+
+  /* --- Puan Geçmişi: sol-altta bir düğme, üstüne tıklanınca olduğu yerden
+     YUKARI doğru açılan bir panel (bottom sabit, max-height büyür). --- */
+  #score-history-btn {
+    position: fixed; bottom: 52px; left: 14px; z-index: 45;
+    background: rgba(30, 41, 59, .95); border: 1px solid #475569; color: #94a3b8;
+    padding: 7px 13px; border-radius: 8px; cursor: pointer; font-size: .78rem;
+    display: flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px #0005; transition: all .15s;
+  }
+  #score-history-btn:hover { background: #273548; color: #e2e8f0; border-color: #64748b; }
+  #score-history-btn.active { background: #052e16; border-color: #16a34a; color: #86efac; }
+  #score-history-panel {
+    position: fixed; left: 14px; bottom: 92px; z-index: 45; width: 240px; max-width: 70vw;
+    background: rgba(15, 23, 42, .97); border: 1px solid #334155; border-radius: 12px;
+    box-shadow: 0 8px 28px #000a; overflow: hidden; display: flex; flex-direction: column;
+    max-height: 0; opacity: 0; pointer-events: none;
+    transition: max-height .28s ease, opacity .2s ease;
+  }
+  #score-history-panel.open { max-height: 320px; opacity: 1; pointer-events: auto; }
+  #score-history-head {
+    display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+    padding: 8px 12px; border-bottom: 1px solid #1e293b; font-size: .72rem; font-weight: 700;
+    color: #64748b; text-transform: uppercase; letter-spacing: .06em;
+  }
+  #score-history-close { background: none; border: none; color: #475569; cursor: pointer; font-size: .95rem; padding: 2px 6px; border-radius: 4px; }
+  #score-history-close:hover { color: #e2e8f0; background: #334155; }
+  #score-history-list { overflow-y: auto; max-height: 274px; padding: 4px 0; }
+  #score-history-list::-webkit-scrollbar { width: 4px; }
+  #score-history-list::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+  .sh-row {
+    display: flex; align-items: center; gap: 8px; padding: 5px 12px; font-size: .76rem;
+    border-bottom: 1px dashed #1e293b;
+  }
+  .sh-row:last-child { border-bottom: none; }
+  .sh-name { flex: 1; color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sh-label { color: #64748b; font-size: .66rem; flex-shrink: 0; }
+  .sh-pts { color: #4ade80; font-weight: 700; flex-shrink: 0; }
+  .sh-empty { padding: 14px 12px; font-size: .74rem; color: #64748b; text-align: center; }
+
+  /* ==========================================================================
+     TAHMİN PANELİ
+     ========================================================================== */
+  #guess-panel {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: rgba(30, 41, 59, .97); border: 1px solid #334155; border-radius: 12px;
+    padding: 14px 18px; min-width: 340px; max-width: 92vw;
+    box-shadow: 0 8px 32px #000a; display: none; z-index: 60;
+  }
+  #guess-panel.visible { display: block; }
+  #guess-country-hint { font-size: .75rem; color: #94a3b8; margin-bottom: 8px; text-align: center; }
+  #guess-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #guess-input {
+    flex: 1; min-width: 150px; background: #0f172a; border: 1px solid #475569; border-radius: 8px;
+    color: #e2e8f0; padding: 8px 12px; font-size: .9rem; outline: none;
+  }
+  #guess-input:focus { border-color: #38bdf8; }
+  #guess-input.wrong { border-color: #ef4444; animation: shake .3s; }
+  #guess-input.correct { border-color: #4ade80; background: #052e16; }
+  @keyframes shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+  #guess-btn { background: #0284c7; border: none; color: #fff; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: .85rem; font-weight: 600; }
+  #guess-btn:hover { background: #0369a1; }
+  #hint-btn, #skip-btn, #locate-btn {
+    background: transparent; border: 1px solid #475569; color: #94a3b8;
+    padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: .8rem;
+  }
+  #hint-btn:hover, #skip-btn:hover, #locate-btn:hover { color: #e2e8f0; border-color: #64748b; }
+  #show-answer-btn { background: #16a34a; border: none; color: #fff; padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: .8rem; display: none; }
+  #show-answer-btn:hover { background: #15803d; }
+  #guess-feedback { text-align: center; font-size: .78rem; margin-top: 8px; min-height: 16px; color: #ef4444; }
+  #guess-feedback.ok { color: #4ade80; }
+
+  /* ==========================================================================
+     ÜLKE BİLGİ KARTI (bayrağın altında eğitici bilgiler)
+     ========================================================================== */
+  #info-card {
+    position: fixed; top: 64px; left: 14px; z-index: 55; width: 250px;
+    background: rgba(15, 23, 42, .96); border: 1px solid #334155; border-radius: 14px;
+    box-shadow: 0 10px 36px #000b; display: none; overflow: hidden;
+    opacity: 1; transition: opacity .6s ease;
+  }
+  #info-card.visible { display: block; animation: cardIn .25s ease-out; }
+  #info-card.fade-out { opacity: 0; }   /* 2 kişilik düellode 5 sn sonra otomatik solma */
+  @keyframes cardIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+  #info-flag-wrap { position: relative; background: #0b1220; text-align: center; padding: 14px 12px 10px; border-bottom: 1px solid #1e293b; }
+  #info-flag { width: 150px; max-width: 80%; border-radius: 6px; border: 1px solid #334155; box-shadow: 0 4px 14px #0008; display: inline-block; }
+  #info-close {
+    position: absolute; top: 6px; right: 8px; background: none; border: none;
+    color: #64748b; font-size: 1rem; cursor: pointer; padding: 2px 6px; border-radius: 4px;
+  }
+  #info-close:hover { color: #e2e8f0; background: #334155; }
+  #info-correct-badge { display: none; font-size: .72rem; color: #4ade80; font-weight: 700; margin-bottom: 6px; letter-spacing: .04em; }
+  #info-card.just-guessed #info-correct-badge { display: block; }
+  #info-name { font-size: 1.02rem; font-weight: 700; color: #e2e8f0; margin-top: 8px; }
+  #info-rows { padding: 10px 14px 12px; }
+  .info-row { display: flex; gap: 8px; padding: 5px 0; font-size: .78rem; border-bottom: 1px dashed #1e293b; }
+  .info-row:last-child { border-bottom: none; }
+  .info-row .k { color: #64748b; min-width: 82px; flex-shrink: 0; }
+  .info-row .v { color: #cbd5e1; font-weight: 600; }
+
+  /* ==========================================================================
+     FARE İPUCU KUTUSU (tooltip)
+     ========================================================================== */
+  #country-tooltip {
+    position: fixed; pointer-events: none; z-index: 70;
+    background: rgba(15, 23, 42, .95); border: 1px solid #334155; border-radius: 8px;
+    padding: 7px 10px; font-size: .8rem; color: #e2e8f0; display: none;
+    transform: translate(-50%, -130%); text-align: center; box-shadow: 0 4px 12px #0008;
+    white-space: nowrap;
+  }
+  #country-tooltip img { display: block; margin: 4px auto 0; border: 1px solid #334155; border-radius: 4px; width: 72px; }
+  #country-tooltip .tip-sub { color: #94a3b8; font-size: .68rem; margin-top: 3px; }
+
+  /* ==========================================================================
+     KENAR ÇUBUĞU (ülke listesi + başarımlar) — tuvalin üstüne kayar,
+     tuvali YENİDEN BOYUTLANDIRMAZ (bulanıklık düzeltmesinin parçası).
+     ========================================================================== */
+  #sidebar {
+    position: fixed; top: 49px; right: 0; bottom: 0; width: 250px; z-index: 50;
+    background: rgba(15, 23, 42, .95); border-left: 1px solid #334155;
+    display: flex; flex-direction: column;
+    transform: translateX(100%); transition: transform .25s ease;
+  }
+  #sidebar.open { transform: translateX(0); }
+  #sidebar-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; border-bottom: 1px solid #334155; flex-shrink: 0;
+  }
+  #sidebar-title { font-size: .75rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: .08em; }
+  #sidebar-close { background: none; border: none; color: #475569; cursor: pointer; font-size: 1rem; padding: 2px 4px; border-radius: 4px; }
+  #sidebar-close:hover { color: #e2e8f0; background: #334155; }
+  #sidebar-toggle {
+    position: fixed; right: 0; top: 50%; transform: translateY(-50%); z-index: 49;
+    background: rgba(30, 41, 59, .95); border: 1px solid #334155; border-right: none;
+    color: #64748b; cursor: pointer; padding: 10px 6px; border-radius: 8px 0 0 8px;
+    font-size: .7rem; writing-mode: vertical-rl; letter-spacing: .05em;
+  }
+  #sidebar-toggle:hover { color: #e2e8f0; background: #273548; }
+  #sidebar.open ~ #sidebar-toggle { display: none; }
+  #country-list { flex: 1; overflow-y: auto; padding: 8px 0; }
+  #country-list::-webkit-scrollbar { width: 4px; }
+  #country-list::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+  .continent-group { margin-bottom: 4px; }
+  .continent-label {
+    padding: 6px 12px 4px; font-size: .7rem; font-weight: 700; letter-spacing: .07em;
+    text-transform: uppercase; color: #7dd3fc; position: sticky; top: 0;
+    background: rgba(15, 23, 42, .98); border-bottom: 1px solid #1e293b;
+    cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+  }
+  .continent-label:hover { background: #1a2740; }
+  .cont-prog { font-size: .65rem; color: #38bdf8; }
+  .continent-items { display: none; }
+  .continent-items.open { display: block; }
+  .country-item {
+    padding: 3px 14px; font-size: .75rem; color: #3f4d63;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .country-item.guessed { color: #4ade80; cursor: pointer; transition: color .1s; }
+  .country-item.guessed:hover { color: #86efac; text-decoration: underline; }
+  .country-item.guessed::before { content: "✓ "; }
+  .country-item.list-highlighted { color: #f87171 !important; }
+  .country-item.list-highlighted::before { content: "● "; }
+  #achievements-container { padding: 10px; border-top: 1px solid #334155; background: rgba(2, 6, 23, .6); flex-shrink: 0; }
+  #achievements-title { font-size: .7rem; color: #94a3b8; margin-bottom: 5px; text-transform: uppercase; }
+  #achievements-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
+  .ach-icon {
+    width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    background: #1e293b; border-radius: 6px; font-size: 1rem; cursor: help; position: relative;
+  }
+  .ach-icon::after {
+    content: attr(data-tooltip); position: absolute; bottom: 110%; right: 0;
+    background: #000; color: #fff; padding: 4px 8px; font-size: .7rem; border-radius: 4px;
+    white-space: nowrap; display: none; pointer-events: none; z-index: 10;
+  }
+  .ach-icon:hover::after { display: block; }
+
+  /* ==========================================================================
+     BAŞARIM BİLDİRİMİ (toast)
+     ========================================================================== */
+  #achievement-toast {
+    position: fixed; top: 60px; left: 16px; z-index: 90;
+    background: #fbbf24; color: #451a03; padding: 10px 16px; border-radius: 8px;
+    font-weight: bold; font-size: .85rem; box-shadow: 0 4px 12px #0006;
+    transform: translateX(-150%); transition: transform .4s cubic-bezier(.4, 0, .2, 1);
+    pointer-events: none;
+  }
+  #achievement-toast.show { transform: translateX(0); }
+  #toast-name { font-weight: normal; color: #78350f; font-size: .75rem; }
+
+  /* ==========================================================================
+     TAM EKRAN KAPLAMALAR: yükleme / başlangıç / oyun sonu
+     ========================================================================== */
+  .overlay {
+    position: fixed; inset: 0; z-index: 100; display: none;
+    align-items: center; justify-content: center; background: rgba(2, 6, 23, .88);
+  }
+  .overlay.visible { display: flex; }
+  .overlay-box {
+    background: #0f172a; border: 1px solid #334155; border-radius: 16px;
+    padding: 32px 38px; text-align: center; max-width: 430px; width: 92vw;
+    box-shadow: 0 20px 60px #000c; position: relative;
+  }
+  .overlay-box h2 { font-size: 1.7rem; margin-bottom: 8px; }
+  .overlay-box p { color: #94a3b8; font-size: .88rem; line-height: 1.55; }
+  .overlay-close { position: absolute; top: 10px; right: 12px; border: none; background: none; color: #64748b; cursor: pointer; font-size: 1rem; }
+  .overlay-close:hover { color: #e2e8f0; }
+  .primary-btn {
+    background: #0284c7; border: none; color: #fff; padding: 11px 26px; border-radius: 9px;
+    cursor: pointer; font-size: .95rem; font-weight: 700; margin: 6px 4px 0;
+  }
+  .primary-btn:hover { background: #0369a1; }
+  .secondary-btn {
+    background: transparent; border: 1px solid #475569; color: #cbd5e1; padding: 11px 22px;
+    border-radius: 9px; cursor: pointer; font-size: .9rem; margin: 6px 4px 0;
+  }
+  .secondary-btn:hover { border-color: #94a3b8; }
+  #loading-status { margin-top: 14px; color: #38bdf8; font-size: .8rem; min-height: 18px; }
+  #loading-bar-wrap { margin-top: 12px; height: 6px; background: #1e293b; border-radius: 3px; overflow: hidden; }
+  #loading-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #0284c7, #38bdf8); transition: width .3s; }
+  .spin { display: inline-block; animation: spin 1.6s linear infinite; font-size: 2rem; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #model-note {
+    margin-top: 14px; text-align: left; font-size: .72rem; color: #64748b;
+    border: 1px dashed #334155; border-radius: 8px; padding: 8px 10px;
+  }
+  #model-note summary { cursor: pointer; color: #7dd3fc; font-size: .76rem; }
+  #model-note p { font-size: .72rem; margin-top: 6px; color: #94a3b8; }
+  #start-error { color: #f87171; font-size: .8rem; margin-top: 10px; display: none; }
+  #export-row { margin-top: 14px; font-size: .72rem; color: #475569; }
+  #export-link { color: #38bdf8; cursor: pointer; text-decoration: underline; }
+  #win-box h2 { color: #4ade80; }
+
+  /* ==========================================================================
+     BAŞLANGIÇ EKRANI — coğrafi, ferah, kürenin dönüşü arkada görünür
+     (backdrop-filter YOK: bulanıklık sorunu geri gelmesin)
+     ========================================================================== */
+  .overlay.start-overlay {
+    background: radial-gradient(ellipse at 50% 42%, rgba(2, 6, 23, 0.10) 0%, rgba(2, 6, 23, 0.55) 62%, rgba(2, 6, 23, 0.82) 100%);
+  }
+  #start-box {
+    max-width: 490px; padding: 26px 30px 20px;
+    background: rgba(10, 16, 34, 0.88);
+    border: 1px solid #1e3a5f;
+    box-shadow: 0 24px 70px #000d, 0 0 0 1px #0ea5e922 inset;
+  }
+  #start-kicker {
+    font-size: .66rem; font-weight: 800; letter-spacing: .35em;
+    color: #0ea5e9; margin-bottom: 4px;
+  }
+  #start-title { font-size: 1.85rem; color: #e8f4ff; margin-bottom: 12px; }
+  #start-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-bottom: 16px; }
+  .chip {
+    font-size: .7rem; color: #93c5fd; background: #0f223f;
+    border: 1px solid #1e3a5f; border-radius: 999px; padding: 4px 11px; white-space: nowrap;
+  }
+  .chip b { color: #e2e8f0; }
+  #start-steps {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px;
+  }
+  .step {
+    background: #0d1830; border: 1px solid #16294a; border-radius: 10px;
+    padding: 10px 8px; display: flex; flex-direction: column; gap: 3px; align-items: center;
+  }
+  .step-icon { font-size: 1.25rem; }
+  .step b { font-size: .74rem; color: #cbd5e1; }
+  .step small { font-size: .64rem; color: #64748b; line-height: 1.35; }
+  /* Üstte solda Tek Kişilik Düello, sağda 2 Kişilik Düello (eşit genişlik);
+     altta ortalı, kısa boylu ve iki üst butonun toplam genişliğine eşit
+     (grid-column: 1/-1) Serbest Keşif butonu — toplam 3 oyun modu. */
+  #mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .mode-card {
+    border-radius: 12px; padding: 13px 10px 11px; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    transition: transform .12s, box-shadow .12s, border-color .12s;
+  }
+  .mode-card b { font-size: .92rem; color: #f1f5f9; }
+  .mode-card small { font-size: .68rem; color: #94a3b8; }
+  .mode-icon { font-size: 1.45rem; margin-bottom: 2px; }
+  .mode-card.solo { background: linear-gradient(160deg, #2a1145, #160a2e); border: 1px solid #7c3aed; }
+  .mode-card.free {
+    grid-column: 1 / -1;                 /* eni üstteki iki butonun toplamı kadar */
+    flex-direction: row; justify-content: center; gap: 8px;
+    padding: 8px 12px;                   /* kısa boy */
+    background: linear-gradient(100deg, #0b3a33, #0a1f2e); border: 1px solid #0d9488;
+  }
+  .mode-card.free .mode-icon { font-size: 1.15rem; margin-bottom: 0; }
+  .mode-card.free small { display: inline; }
+  .mode-card:hover { transform: translateY(-2px); box-shadow: 0 8px 22px #0009; }
+  .mode-card.solo:hover { border-color: #a78bfa; }
+  .mode-card.free:hover { border-color: #2dd4bf; }
+  #start-trivia {
+    margin-top: 14px; font-size: .74rem; color: #fbbf24; min-height: 32px;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    background: #1c150533; border: 1px dashed #78350f88; border-radius: 8px; padding: 6px 12px;
+  }
+  #trivia-text { transition: opacity .25s; color: #fcd34d; }
+
+  /* Künyedeki alfabe örneği */
+  .script-sample {
+    margin-top: 2px; font-size: .95rem; color: #7dd3fc; letter-spacing: .04em; line-height: 1.3;
+  }
+  /* Yerel ad (endonim): Türkçe adın altında, kendi alfabesiyle */
+  #info-native { font-size: .8rem; color: #94a3b8; margin-top: 2px; line-height: 1.35; }
+  /* İpucu bayrağı ve skor tablosu */
+  .hint-flag { height: 26px; vertical-align: middle; border-radius: 3px; border: 1px solid #334155; }
+  #scoreboard-box { max-width: 560px; }
+  #scoreboard-body { max-height: 46vh; overflow-y: auto; margin: 8px 0 12px; border: 1px solid #1e293b; border-radius: 10px; }
+  .sb-row {
+    display: grid; grid-template-columns: 1fr 1.4fr .9fr .7fr .7fr 1fr;
+    gap: 6px; padding: 6px 10px; font-size: .72rem; color: #cbd5e1;
+    border-bottom: 1px solid #16233c; align-items: center; text-align: left;
+  }
+  .sb-row:last-child { border-bottom: none; }
+  .sb-row b { color: #fbbf24; }
+  .sb-row.sb-head { color: #64748b; text-transform: uppercase; font-size: .6rem; letter-spacing: .06em; background: #0d1830; }
+  .sb-empty { padding: 18px; font-size: .78rem; color: #64748b; }
+
+  /* ==========================================================================
+     ⚔️ DÜELLO MODU
+     ========================================================================== */
+  #mp-bar {
+    position: fixed; top: 52px; left: 50%; transform: translateX(-50%); z-index: 44;
+    display: none; align-items: center; gap: 10px;
+    background: rgba(15, 23, 42, 0.93); border: 1px solid #334155; border-radius: 12px;
+    padding: 6px 12px; box-shadow: 0 6px 20px #0008;
+  }
+  .mp-player {
+    display: flex; align-items: center; gap: 7px; padding: 4px 11px;
+    border-radius: 8px; border: 1px solid #334155; background: #0d1830;
+    transition: all .2s; opacity: .65;
+  }
+  .mp-player.active {
+    border-color: #f59e0b; opacity: 1;
+    box-shadow: 0 0 10px #f59e0b55; background: #1c1502;
+  }
+  .mp-pname { font-size: .72rem; color: #94a3b8; font-weight: 700; }
+  .mp-player.active .mp-pname { color: #fbbf24; }
+  .mp-score { font-size: .95rem; font-weight: 800; color: #e2e8f0; }
+  .mp-streak { font-size: .7rem; color: #fb923c; min-width: 0; }
+  #mp-mid { display: flex; flex-direction: column; align-items: center; font-size: 1rem; }
+  #mp-remaining-row { display: flex; align-items: center; gap: 6px; }
+  #mp-remaining { font-size: .58rem; color: #64748b; white-space: nowrap; }
+  #mp-timer { font-size: .58rem; color: #64748b; white-space: nowrap; }
+  #mp-legend { display: none; text-align: center; font-size: .66rem; color: #64748b; margin-top: 7px; }
+  #duel-rules { border: 1px solid #334155; border-radius: 10px; overflow: hidden; }
+  #duel-rules .rule {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 13px; font-size: .78rem; color: #cbd5e1; border-bottom: 1px solid #1e293b;
+  }
+  #duel-rules .rule:last-child { border-bottom: none; }
+  #duel-rules .rule:nth-child(odd) { background: #0d1830; }
+  #duel-rules b.pos { color: #4ade80; }
+  #duel-rules b.neg { color: #f87171; }
+  .mode-card.duel { background: linear-gradient(160deg, #3b2404, #1c1208); border: 1px solid #b45309; }
+  .mode-card.duel:hover { border-color: #f59e0b; }
+  #duel-online-panel { margin-top: 12px; border: 1px solid #1e3a5f; border-radius: 10px; padding: 10px; background: #0a1428; }
+  .net-input {
+    background: #0f172a; border: 1px solid #475569; border-radius: 8px; color: #e2e8f0;
+    padding: 8px 10px; font-size: .84rem; outline: none; width: 100%;
+  }
+  .net-input:focus { border-color: #38bdf8; }
+  #duel-nick { margin-bottom: 8px; }
+  #duel-net-rows { display: grid; grid-template-columns: 1fr 1.4fr; gap: 8px; align-items: stretch; }
+  #duel-join-row { display: flex; gap: 6px; }
+  #duel-code-input { text-transform: uppercase; letter-spacing: .15em; font-weight: 700; text-align: center; }
+  #duel-net-rows .primary-btn { margin: 0; padding: 9px 10px; font-size: .82rem; white-space: nowrap; }
+  #duel-net-status { margin-top: 9px; font-size: .78rem; color: #7dd3fc; min-height: 18px; line-height: 1.45; }
+  #duel-net-status .room-code { font-size: 1.25rem; font-weight: 800; letter-spacing: .3em; color: #fbbf24; }
+  #duel-local-row { margin-top: 10px; }
+  #turn-banner {
+    position: fixed; top: 100px; left: 50%; transform: translateX(-50%); z-index: 46;
+    background: rgba(28, 21, 2, .95); border: 1px solid #b45309; color: #fcd34d;
+    border-radius: 999px; padding: 6px 16px; font-size: .78rem; display: none;
+    box-shadow: 0 6px 18px #0008; white-space: nowrap;
+  }
+  /* Çevrimiçi düelloda sıra rakipteyken kamera artık otomatik onun ülkesine
+     uçmaz; bu buton isteğe bağlı olarak rakibin ülkesini haritada gösterir. */
+  #show-opp-country-btn {
+    position: fixed; top: 140px; left: 50%; transform: translateX(-50%); z-index: 46;
+    display: none; align-items: center; gap: 6px;
+    background: rgba(15, 23, 42, .92); border: 1px solid #475569; color: #94a3b8;
+    padding: 6px 14px; border-radius: 999px; cursor: pointer; font-size: .74rem;
+    box-shadow: 0 4px 14px #0007;
+  }
+  #show-opp-country-btn:hover { color: #e2e8f0; border-color: #64748b; }
+  @media (max-width: 640px) {
+    #turn-banner { top: 126px; max-width: 94vw; white-space: normal; text-align: center; }
+    #show-opp-country-btn { top: 168px; }
+    #duel-net-rows { grid-template-columns: 1fr; }
+  }
+  .country-item.revealed { color: #94a3b8; cursor: pointer; }
+  .country-item.revealed::before { content: "— "; }
+  .country-item.revealed:hover { color: #cbd5e1; text-decoration: underline; }
+
+  /* ==========================================================================
+     MOBİL / DOKUNMATİK UYUM (uygulama hissi)
+     ========================================================================== */
+  button, .remain-marker { touch-action: manipulation; }
+  @media (pointer: coarse) {
+    .remain-marker { width: 26px; height: 26px; margin: -13px 0 0 -13px; line-height: 22px; font-size: 14px; }
+    .zoom-btn-hdr { width: 34px; height: 34px; }
+  }
+  @media (max-width: 640px) {
+    #header { flex-wrap: wrap; padding: 6px 8px; gap: 6px; }
+    #header h1 { font-size: .82rem; }
+    #progress, #wrong-count, #timer-box { font-size: .7rem; }
+    #zoom-controls { margin-left: auto; }
+    #sidebar { width: min(80vw, 300px); }
+    #guess-panel { min-width: 0; width: calc(100vw - 16px); bottom: 8px; padding: 10px 12px; }
+    #info-card { width: 208px; top: 130px; left: 8px; max-height: calc(100vh - 230px); overflow-y: auto; }
+    #info-flag { width: 110px; }
+    #mp-bar { top: 84px; width: calc(100vw - 12px); justify-content: center; gap: 6px; padding: 5px 6px; }
+    .mp-player { padding: 3px 8px; }
+    #map-hint { display: none; }
+    #start-box { padding: 18px 14px 14px; max-height: 94vh; overflow-y: auto; }
+    #start-title { font-size: 1.45rem; }
+    #mode-cards { grid-template-columns: 1fr; }
+    #start-steps { gap: 5px; }
+    .step small { display: none; }
+    #show-remaining-btn { bottom: auto; top: 130px; right: 8px; left: auto; }
+    #score-history-btn { bottom: 14px; }
+    #score-history-panel { bottom: 52px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- 3B KÜRE TUVALİ -->
+<div id="globe"></div>
+
+<!-- EKRAN-SABİT İŞARETÇİ KATMANI -->
+<div id="markers-layer"></div>
+
+<!-- ÜST BİLGİ ÇUBUĞU -->
+<div id="header">
+  <h1>🌍 Dünya Ülkeleri — 3B</h1>
+  <div id="header-center">
+    <div id="progress">İlerleme: <span id="prog-count">0</span> / <span class="js-total">…</span></div>
+    <div id="wrong-count">Yanlış: <span id="wrong-num">0</span></div>
+    <div id="free-score-box" style="display:none">Skor: <span id="free-score">0</span></div>
+    <div id="timer-box" style="display:none">⏱ <span id="timer">30:00</span></div>
+  </div>
+  <div id="zoom-controls">
+    <span id="zoom-level-label">Genel</span>
+    <button class="zoom-btn-hdr" id="btn-zoom-out" title="Uzaklaş">−</button>
+    <button class="zoom-btn-hdr" id="btn-zoom-in" title="Yakınlaş">+</button>
+    <button class="zoom-btn-hdr" id="pause-btn" title="Duraklat" style="display:none">⏸</button>
+  </div>
+</div>
+
+<!-- BAŞARIM BİLDİRİMİ -->
+<div id="achievement-toast"><b id="toast-head">Başarım Kazanıldı!</b><br><span id="toast-name"></span></div>
+
+<!-- ⚔️ DÜELLO SKOR ÇUBUĞU -->
+<div id="mp-bar">
+  <div class="mp-player" id="mp-p0">
+    <span class="mp-pname">1. Oyuncu</span><span class="mp-score">1000</span><span class="mp-streak"></span>
+  </div>
+  <div id="mp-mid">⚔️<div id="mp-remaining-row"><span id="mp-remaining"></span><span id="mp-timer" style="display:none">⏱ <span id="mp-timer-val">0:00</span></span></div></div>
+  <div class="mp-player" id="mp-p1">
+    <span class="mp-pname">2. Oyuncu</span><span class="mp-score">1000</span><span class="mp-streak"></span>
+  </div>
+</div>
+
+<!-- FARE İPUCU KUTUSU -->
+<div id="country-tooltip"></div>
+
+<!-- ÜLKE BİLGİ KARTI -->
+<div id="info-card">
+  <div id="info-flag-wrap">
+    <button id="info-close" title="Kapat">✕</button>
+    <div id="info-correct-badge">✓ DOĞRU BİLDİN!</div>
+    <img id="info-flag" alt="Bayrak" src="">
+    <div id="info-name"></div>
+    <div id="info-native"></div>
+  </div>
+  <div id="info-rows"></div>
+</div>
+
+<!-- KALANLARI GÖSTER BUTONU + KAYNAK NOTU -->
+<button id="show-remaining-btn"><span class="dot-icon"></span> Kalanları göster</button>
+<div id="map-hint">
+  Sınırlar: Natural Earth · Doku: NASA Blue Marble · Bayraklar: FlagCDN · 3B: globe.gl
+</div>
+
+<!-- 📜 PUAN GEÇMİŞİ: sol altta, tıklanınca olduğu yerden yukarı doğru açılır -->
+<button id="score-history-btn">📜 Geçmiş</button>
+<div id="score-history-panel">
+  <div id="score-history-head">
+    <span>Puan Geçmişi</span>
+    <button id="score-history-close" title="Kapat">✕</button>
+  </div>
+  <div id="score-history-list">
+    <div class="sh-empty">Henüz puan kazanılmadı.</div>
+  </div>
+</div>
+
+<!-- TAHMİN PANELİ -->
+<div id="guess-panel">
+  <div id="guess-country-hint">Bu ülkeyi biliyor musun?</div>
+  <div id="guess-row">
+    <input id="guess-input" type="text" placeholder="Ülke adını gir..." autocomplete="off" />
+    <button id="guess-btn">Tahmin</button>
+    <button id="hint-btn" title="İpucu al (sıralı gelir)">💡</button>
+    <button id="locate-btn" title="Ülkeyi haritada göster — kamerayı sorulan ülkeye döndür">📍</button>
+    <button id="skip-btn">Vazgeç</button>
+    <button id="show-answer-btn" title="Cevabı göster ve sıradaki ülkeye geç">Cevabı Göster (−50)</button>
+  </div>
+  <div id="guess-feedback"></div>
+  <div id="mp-legend">✓ +100 (+zorluk+seri) · ✗ −15 · 💡 ilk ipucu −30, harf başına −10 · Pas −100 (rakibe devredilir)</div>
+</div>
+
+<!-- KENAR ÇUBUĞU -->
+<div id="sidebar">
+  <div id="sidebar-header">
+    <div id="sidebar-title">Ülkeler</div>
+    <button id="sidebar-close" title="Gizle">✕</button>
+  </div>
+  <div id="country-list"></div>
+  <div id="achievements-container">
+    <div id="achievements-title">Başarımlar</div>
+    <div id="achievements-grid"></div>
+  </div>
+</div>
+<button id="sidebar-toggle">Liste</button>
+
+<!-- YÜKLEME EKRANI -->
+<div id="loading-overlay" class="overlay visible">
+  <div class="overlay-box">
+    <span class="spin">🌍</span>
+    <h2 style="color:#38bdf8">Dünya hazırlanıyor…</h2>
+    <div id="loading-bar-wrap"><div id="loading-bar"></div></div>
+    <div id="loading-status">Kütüphaneler yükleniyor…</div>
+  </div>
+</div>
+
+<!-- BAŞLANGIÇ EKRANI — yarı saydamdır: arkada küre dönmeye devam eder -->
+<div id="start-overlay" class="overlay start-overlay">
+  <div class="overlay-box" id="start-box">
+    <div id="start-kicker">3B COĞRAFYA OYUNU</div>
+    <h2 id="start-title">🌍 Dünya Ülkeleri</h2>
+    <div id="start-chips">
+      <span class="chip">🗺 <b class="js-total">…</b> ülke</span>
+      <span class="chip">🧭 6 kıta</span>
+      <span class="chip">🛰 Gerçek uydu dokusu</span>
+      <span class="chip">⛰ Kabartmalı yükselti</span>
+    </div>
+    <div id="start-steps">
+      <div class="step"><span class="step-icon">🖱️</span><b>Çevir &amp; tıkla</b><small>Küreyi döndür, bir ülke seç</small></div>
+      <div class="step"><span class="step-icon">⌨️</span><b>Adını yaz</b><small>Takılırsan 💡 ipucu al</small></div>
+      <div class="step"><span class="step-icon">🚩</span><b>Künyeyi kazan</b><small>Bayrak, başkent, alfabe…</small></div>
+    </div>
+    <div id="mode-cards">
+      <button id="mode-solo" class="mode-card solo">
+        <span class="mode-icon">🎯</span><b>Tek Kişilik Düello</b><small>1000 puan · pas bedava (sonraya atar) · ⏸ mola</small>
+      </button>
+      <button id="mode-duel" class="mode-card duel">
+        <span class="mode-icon">⚔️</span><b>2 Kişilik Düello</b><small>🌐 Çevrimiçi (oda koduyla) veya aynı cihazda</small>
+      </button>
+      <button id="mode-free" class="mode-card free">
+        <span class="mode-icon">🧭</span><b>Serbest Keşif</b><small>Süre işler · skorun tabloya yazılır</small>
+      </button>
+    </div>
+    <div id="start-trivia">💡 <span id="trivia-text"></span></div>
+    <details id="model-note">
+      <summary>🛰 Bu dünya modeli hakkında (eğitici not)</summary>
+      <p>Küre, Dünya'nın gerçek şekline en yakın matematiksel model olan
+      <b>WGS84 elipsoidi</b>ne göre kutuplardan 1/298,257 oranında basıktır.
+      Gerçek "jeoit" (deniz seviyesinin şekli) elipsoitten en fazla ±100 m sapar —
+      bu, küre ölçeğinde görülemeyecek kadar küçüktür. Dağlar ve okyanus tabanı
+      gibi <b>yükseltiler</b>, NASA/ETOPO verisinden üretilen kabartma dokusuyla
+      gösterilir. Uydu görüntüsü: NASA Blue Marble. Sınırlar: Natural Earth 1:50m.</p>
+    </details>
+    <div id="export-row">
+      <span id="scoreboard-link">📊 Skor tablon</span> ·
+      İyileştirilmiş sınır verisi: <span id="export-link">dunya_ulkeleri.geojson ⬇</span>
+    </div>
+    <div id="start-error"></div>
+  </div>
+</div>
+
+<!-- ⚔️ DÜELLO KURULUM EKRANI (çevrimiçi oda kur/katıl + aynı cihazda) -->
+<div id="duel-overlay" class="overlay">
+  <div class="overlay-box">
+    <h2 style="color:#f59e0b">⚔️ 2 Kişilik Düello</h2>
+    <p style="margin-bottom:10px">Sırayla, oyunun seçtiği <b>rastgele ülkeyi</b> bilmeye çalışırsınız.</p>
+    <div id="duel-rules">
+      <div class="rule"><span>Başlangıç puanı</span><b>1000</b></div>
+      <div class="rule"><span>✓ Doğru bilme</span><b class="pos">+100 <span style="color:#94a3b8">(+ zorluk bonusu)</span></b></div>
+      <div class="rule"><span>✗ Yanlış deneme</span><b class="neg">−15</b></div>
+      <div class="rule"><span>💡 İlk ipucu (harf sayısı+şablon, başkent, bayrak)</span><b class="neg">−30</b></div>
+      <div class="rule"><span>💡 Sonraki ipuçları (birer harf açar)</span><b class="neg">−10</b></div>
+      <div class="rule"><span>Pas: ülke rakibe devredilir</span><b class="neg">−100 <span style="color:#4ade80">(rakip bilirse +100, onun pası bedava)</span></b></div>
+      <div class="rule"><span>⏱ Tur süresi (çevrimiçi)</span><b class="neg">60 sn → otomatik pas</b></div>
+      <div class="rule"><span>🔥 Temiz seri 10 / 20 / 30</span><b class="pos">+100 / +200 / +300</b></div>
+    </div>
+    <p style="font-size:.72rem;margin-top:8px">Zorluk bonusu: küçük/az nüfuslu ülkede +50, sıradan ülkede +25.
+    Temiz seri: ardarda, hiç yanlışsız ve ipucusuz bilmek.
+    <b>Puanı biten kaybeder.</b> Ülkeler biterse yüksek puanlı kazanır.</p>
+
+    <div id="duel-online-panel">
+      <input id="duel-nick" class="net-input" maxlength="12" placeholder="Takma adın (isteğe bağlı)" autocomplete="off">
+      <div id="duel-net-rows">
+        <button id="duel-host-btn" class="primary-btn">🌐 Oda Kur</button>
+        <div id="duel-join-row">
+          <input id="duel-code-input" class="net-input" maxlength="5" placeholder="ODA KODU" autocomplete="off">
+          <button id="duel-join-btn" class="primary-btn">Katıl</button>
+        </div>
+      </div>
+      <div id="duel-net-status"></div>
+    </div>
+
+    <div id="duel-local-row">
+      <button id="duel-start-btn" class="secondary-btn">📱 Aynı Cihazda Başlat</button>
+      <button id="duel-cancel-btn" class="secondary-btn">Geri</button>
+    </div>
+  </div>
+</div>
+
+<!-- ÇEVRİMİÇİ DÜELLODA SIRA/DURUM ŞERİDİ -->
+<div id="turn-banner"></div>
+<button id="show-opp-country-btn">👁 Rakip ülkeyi göster</button>
+
+<!-- KAZANMA / DÜELLO SONU EKRANI -->
+<div id="win-overlay" class="overlay">
+  <div class="overlay-box" id="win-box">
+    <button class="overlay-close" data-close="win-overlay">✕</button>
+    <h2 id="win-title">🎉 Tebrikler!</h2>
+    <p id="win-text">Tüm <span class="js-total">…</span> ülkeyi buldun!</p>
+    <button id="restart-btn" class="primary-btn">Yeniden Oyna</button>
+    <button id="win-scores-btn" class="secondary-btn">📊 Skor Tablosu</button>
+  </div>
+</div>
+
+<!-- ⏸ DURAKLATMA EKRANI -->
+<div id="pause-overlay" class="overlay">
+  <div class="overlay-box">
+    <h2 style="color:#38bdf8">⏸ Oyun Duraklatıldı</h2>
+    <p>Süre durdu. Hazır olduğunda devam et.</p>
+    <button id="resume-btn" class="primary-btn">▶ Devam Et</button>
+  </div>
+</div>
+
+<!-- 📊 KİŞİSEL SKOR TABLOSU -->
+<div id="scoreboard-overlay" class="overlay">
+  <div class="overlay-box" id="scoreboard-box">
+    <button class="overlay-close" data-close="scoreboard-overlay">✕</button>
+    <h2 style="color:#38bdf8">📊 Skor Tablon</h2>
+    <div id="scoreboard-body"></div>
+    <button id="scoreboard-clear" class="secondary-btn" style="font-size:.75rem;padding:7px 14px">Temizle</button>
+  </div>
+</div>
+
+<script>
+/* ============================================================================
+   BÖLÜM 1: OYUN VERİLERİ
+   ----------------------------------------------------------------------------
+   Bu blokta yalnızca VERİ vardır, mantık yoktur:
+   - CONTINENTS / CENTROIDS / FLAG_MAP / ALIASES : özgün oyundan taşındı
+   - COUNTRY_INFO  : başkent, nüfus (yaklaşık), resmî dil(ler), yüzölçümü
+   - NE_ID_TO_GAME : ISO 3166-1 sayısal kod → oyundaki ülke adı
+                     (Natural Earth verisini oyunla eşleştirmek için)
+   - NE_NAME_FIX   : sayısal kodu olmayan Natural Earth kayıtları için ad eşleme
+   ============================================================================ */
+
+const CONTINENTS = {"Avrupa":["Almanya","Andorra","Arnavutluk","Avusturya","Belçika","Beyaz Rusya","Birleşik Krallık","Bosna-Hersek","Bulgaristan","Danimarka","Estonya","Finlandiya","Fransa","Hollanda","Hırvatistan","Karadağ","Kosova","Kuzey Makedonya","Letonya","Lihtenştayn","Litvanya","Lüksemburg","Macaristan","Malta","Moldova","Monako","Norveç","Polonya","Portekiz","Romanya","Rusya","San Marino","Slovakya","Slovenya","Sırbistan","Ukrayna","Vatikan","Yunanistan","Çekya","İrlanda","İspanya","İsveç","İsviçre","İtalya","İzlanda"],"Asya":["Afganistan","Azerbaycan","Bahreyn","Bangladeş","Bhutan","Birleşik Arap Emirlikleri","Brunei","Doğu Timor","Endonezya","Ermenistan","Filipinler","Filistin","Güney Kore","Gürcistan","Hindistan","Irak","Japonya","Kamboçya","Katar","Kazakistan","Kuveyt","Kuzey Kore","Kuzey Kıbrıs Türk Cumhuriyeti","Güney Kıbrıs Rum Yönetimi","Kırgızistan","Laos","Lübnan","Maldivler","Malezya","Moğolistan","Myanmar","Nepal","Pakistan","Singapur","Sri Lanka","Suriye","Suudi Arabistan","Tacikistan","Tayland","Tayvan","Türkiye","Türkmenistan","Umman","Vietnam","Yemen","Çin","Özbekistan","Ürdün","İran","İsrail"],"Afrika":["Angola","Benin","Botsvana","Burkina Faso","Burundi","Cezayir","Cibuti","Ekvator Ginesi","Eritre","Esvatini","Etiyopya","Fas","Fildişi Sahili","Gabon","Gambiya","Gana","Gine","Gine-Bissau","Güney Afrika","Güney Sudan","Kamerun","Kenya","Komorlar","Kongo Cumhuriyeti","Kongo Demokratik Cumhuriyeti","Lesotho","Liberya","Libya","Madagaskar","Malavi","Mali","Mauritius","Moritanya","Mozambik","Mısır","Namibya","Nijer","Nijerya","Orta Afrika Cumhuriyeti","Ruanda","Senegal","Seyşeller","Sierra Leone","Somali","Sudan","São Tomé ve Príncipe","Tanzanya","Togo","Tunus","Uganda","Yeşil Burun Adaları","Zambiya","Zimbabve","Çad"],"Kuzey Amerika":["Amerika Birleşik Devletleri","Antigua ve Barbuda","Bahamalar","Barbados","Belize","Dominik Cumhuriyeti","Dominika","El Salvador","Grenada","Guatemala","Haiti","Honduras","Jamaika","Kanada","Kosta Rika","Küba","Meksika","Nikaragua","Panama","Saint Kitts ve Nevis","Saint Lucia","Saint Vincent ve Grenadinler","Trinidad ve Tobago"],"Güney Amerika":["Arjantin","Bolivya","Brezilya","Ekvador","Guyana","Kolombiya","Paraguay","Peru","Surinam","Uruguay","Venezuela","Şili"],"Okyanusya":["Avustralya","Fiji","Kiribati","Marshall Adaları","Mikronezya","Nauru","Palau","Papua Yeni Gine","Samoa","Solomon Adaları","Tonga","Tuvalu","Vanuatu","Yeni Zelanda"]};
+const CONTINENTS_ORDER = ["Avrupa", "Asya", "Kuzey Amerika", "Güney Amerika", "Afrika", "Okyanusya"];
+const CENTROIDS = {"Almanya":[9.877098936,50.763668987],"Andorra":[1.52646608,42.52623372],"Arnavutluk":[20.046410921052633,41.05361421052632],"Avusturya":[13.451951084444444,47.65213912222222],"Belçika":[5.009855868181818,50.72022421590909],"Beyaz Rusya":[28.093275046969698,53.49769288939394],"Birleşik Krallık":[-3.7347859336842104,54.85330717052632],"Bosna-Hersek":[17.905391803703704,44.06259647777778],"Bulgaristan":[25.22455167297297,42.77372351351352],"Danimarka":[10.55133265882353,56.09927923529411],"Estonya":[24.986967536,58.299790316],"Finlandiya":[25.63863599275362,65.82028325217391],"Fransa":[2.794947405952381,46.952163015476195],"Hırvatistan":[16.47471249310345,44.479090443103445],"Hollanda":[5.478255747058824,51.782163352941176],"İrlanda":[-8.053907149999999,53.60006471],"İspanya":[-3.7460845483333336,40.50899481333333],"İsveç":[16.63698839,62.726376297777776],"İsviçre":[8.52950759117647,46.74641329705882],"İtalya":[12.358440081176472,42.51195940352941],"İzlanda":[-17.872471424,65.41531328],"Karadağ":[19.26214395625,42.6187071875],"Kosova":[20.7889073,42.63870325714286],"Letonya":[24.79471032142857,56.869232607142855],"Lihtenştayn":[9.550725825,47.136779475],"Litvanya":[23.930291786206897,55.08630276206897],"Lüksemburg":[6.020197075,49.725272775],"Macaristan":[19.0390076,47.5681066],"Kuzey Makedonya":[21.894839283333337,41.4997271],"Malta":[14.309490957142858,36.005823771428574],"Moldova":[28.652441541176472,47.11319997058824],"Monako":[7.427178785714285,43.73976171428571],"Norveç":[16.866431383870967,65.63399351182795],"Polonya":[18.753557262745097,51.50692886470588],"Portekiz":[-7.907244335714286,39.62384827142857],"Romanya":[24.972215495238093,45.70960167142857],"Rusya":[90.45129983855263,57.533556035],"San Marino":[12.46888,43.949811499999996],"Sırbistan":[20.635121241860464,44.21102860465116],"Slovakya":[19.528398022222223,48.67022864444444],"Slovenya":[14.966323396296296,46.066139648148145],"Ukrayna":[31.603414067716535,48.7096622992126],"Vatikan":[12.45592025,41.904307],"Yunanistan":[23.555979173451327,38.570064918584066],"Afganistan":[67.52257408913044,34.826946523913044],"Azerbaycan":[47.37973349285714,40.22614070238095],"Bahreyn":[50.548602914285716,26.114084228571432],"Bangladeş":[90.11351365714286,24.226888223809524],"Bhutan":[90.48298046470589,27.39919235882353],"Birleşik Arap Emirlikleri":[54.45648301785714,24.687777892857145],"Myanmar":[97.50723105181818,21.189069328181816],"Brunei":[114.8170213181818,4.6795335636363635],"Çin":[104.72512216036269,37.89379489663212],"Endonezya":[119.53650816638655,-1.9529090831932772],"Ermenistan":[45.28617852222222,40.133198433333334],"Filipinler":[121.10529653846154,10.362125302564102],"Güney Kore":[127.11725503225806,35.69010933548387],"Gürcistan":[43.611329383333334,42.150343330000005],"Hindistan":[83.65834727056277,25.973616373160173],"Irak":[44.95603387647059,33.61578760588235],"İran":[52.80124909333334,34.00186764095238],"İsrail":[35.098930005,32.031174005000004],"Japonya":[135.7666889390625,35.235719896875],"Kamboçya":[105.24539712608694,12.381190063043478],"Katar":[51.12962826666667,25.469819844444444],"Kazakistan":[65.85796970798319,49.12009472268908],"Kırgızistan":[73.15622842,41.00370889142857],"Kuveyt":[47.773373129999996,29.202926150000003],"Kuzey Kore":[128.3293401125,40.96656696785714],"Laos":[103.60154393461539,18.70192527307692],"Lübnan":[35.93985474285714,33.85113257142857],"Maldivler":[73.22538251666667,3.632738408333333],"Malezya":[115.03412323773584,3.6536946924528304],"Moğolistan":[101.98003606806722,47.76228822605042],"Nepal":[84.35221460784314,28.09631970392157],"Özbekistan":[65.98441172150538,40.94226118494623],"Pakistan":[70.41665528198199,30.81051785135135],"Singapur":[103.81310142,1.30690578],"Sri Lanka":[80.46213855882354,8.028466164705883],"Suriye":[37.84937984324324,35.29547749459459],"Suudi Arabistan":[43.851194515625,24.1822602453125],"Tacikistan":[70.66628625068493,38.87726488904109],"Tayland":[100.41348396981132,13.38100178490566],"Tayvan":[120.98273636363636,23.74476363636364],"Doğu Timor":[125.80406163636363,-8.762695209090909],"Türkiye":[34.32595902970297,39.06482042079208],"Türkmenistan":[58.779076814084505,39.32909711267605],"Umman":[56.625102602702704,21.339695805405405],"Ürdün":[37.1150676,31.316410377777782],"Vietnam":[105.37323893411765,17.30407198470588],"Yemen":[45.321856304444445,15.5398274],"Angola":[17.76856367962963,-11.716685840740741],"Benin":[2.264240103448276,9.899822355172414],"Botsvana":[24.474472113157894,-22.67245503157895],"Burkina Faso":[-1.9540900296296297,12.183515250000001],"Burundi":[29.897957209999998,-3.0849948300000003],"Yeşil Burun Adaları":[-24.420759607692307,16.24220826923077],"Çad":[18.444032730508475,13.283857238983051],"Cezayir":[2.9936915493150686,30.018592779452057],"Cibuti":[42.73806363333333,11.951103716666665],"Kongo Demokratik Cumhuriyeti":[23.733039837301586,-4.0326437126984125],"Ekvator Ginesi":[10.03101931111111,1.6011317555555555],"Eritre":[39.37649471388889,15.134563283333332],"Esvatini":[31.454398322222218,-26.639726044444444],"Etiyopya":[38.595335823333336,8.969626273333335],"Fas":[-7.63354509032258,29.89981880483871],"Fildişi Sahili":[-6.027494740000001,8.197017489090909],"Gabon":[12.24913292051282,-1.2638032205128205],"Gambiya":[-15.629700135294119,13.411939570588235],"Gana":[-1.0487809756756756,7.927077686486486],"Gine-Bissau":[-15.04126445,11.894066125],"Gine":[-10.786702361428572,10.104402247142856],"Güney Afrika":[24.48506530952381,-27.81754585873016],"Güney Sudan":[30.223550971428573,7.38185026103896],"Kamerun":[12.581684814545456,7.3040923399999995],"Kenya":[37.433251040740736,1.806869248148148],"Komorlar":[43.594680700000005,-11.965761042857142],"Kongo Cumhuriyeti":[14.316883391044776,-1.4873248731343285],"Lesotho":[28.072386425,-29.707540775],"Liberya":[-9.233473266666666,6.895448108333333],"Libya":[15.629995807142857,28.36637702142857],"Madagaskar":[46.51186792000001,-18.438835184],"Malavi":[34.0999851475,-13.1495939125],"Mali":[-5.5917508209302325,14.232735451162792],"Mauritius":[57.56819854285715,-20.281530371428573],"Mısır":[31.019668679166667,28.409264716666666],"Moritanya":[-12.04745590882353,18.78749508529412],"Mozambik":[35.067023299999995,-17.36925478],"Namibya":[17.81980199,-21.571115335],"Nijer":[7.179463152830188,15.390115],"Nijerya":[8.588758339682538,9.664470276190476],"Orta Afrika Cumhuriyeti":[21.171710824242425,6.290103021212121],"Ruanda":[29.69662677222222,-2.1350572333333333],"São Tomé ve Príncipe":[6.882716285714286,0.7661330571428572],"Senegal":[-14.736109030232559,13.90596228372093],"Seyşeller":[55.565924575,-4.188592458333333],"Sierra Leone":[-11.71211674,8.515746595],"Somali":[46.383402884999995,7.717206482500001],"Sudan":[30.13009041647059,13.924970928235293],"Tanzanya":[34.64480727115385,-7.289034732692307],"Togo":[0.7558412076923078,8.866024626923076],"Tunus":[9.660732216666666,34.76734600714286],"Uganda":[32.15832942666667,1.79747474],"Zambiya":[28.716245491549298,-12.545151052112676],"Zimbabve":[29.97920074347826,-18.986823249999997],"Antigua ve Barbuda":[-62.04546738571428,17.26367467142857],"Bahamalar":[-77.82917322222222,24.22186318888889],"Barbados":[-59.649482666666664,13.179166666666667],"Belize":[-88.31159447692306,17.301341484615385],"Amerika Birleşik Devletleri":[-154.9401777894737,59.32872402966507],"Dominik Cumhuriyeti":[-70.9392948,19.2204321],"Dominika":[-61.37928376,15.424767220000001],"El Salvador":[-88.83885777333333,13.676459719999999],"Grenada":[-61.73123285,12.104377883333333],"Guatemala":[-90.33877065,15.497347386363636],"Haiti":[-72.97540179166667,18.934009733333333],"Honduras":[-85.62977946999999,14.735827277499999],"Jamaika":[-77.65512386666666,17.937728355555556],"Kanada":[-90.19714643157894,58.13878286172249],"Kosta Rika":[-83.93214858461539,10.032272415384616],"Küba":[-79.84185872272727,21.359846490909092],"Meksika":[-102.29787156305733,23.447576457324843],"Nikaragua":[-85.08108278181818,12.876554572727272],"Panama":[-80.59820561304348,8.57294694347826],"Saint Kitts ve Nevis":[-62.77133056,17.2691771],"Saint Lucia":[-61.00953751428572,13.857720214285715],"Saint Vincent ve Grenadinler":[-61.2730241,12.865032814285714],"Trinidad ve Tobago":[-61.16507465,10.638893975],"Arjantin":[-65.40296336026786,-36.854675067857144],"Bolivya":[-64.95238007922079,-16.653619951948052],"Brezilya":[-57.66491978427947,-9.936359204803495],"Ekvador":[-78.20804592972974,-1.8838365324324322],"Guyana":[-59.02059378297872,4.505840117021276],"Kolombiya":[-72.24790658333333,3.5129209722222225],"Paraguay":[-57.80937787962963,-24.717082201851852],"Peru":[-74.69393867096774,-7.812126952688172],"Şili":[-71.34507574590164,-38.23215423169399],"Surinam":[-56.05354881923077,3.801133069230769],"Uruguay":[-56.737236258974356,-32.390334156410255],"Venezuela":[-65.93065709252336,7.020925980373832],"Avustralya":[136.43432672941177,-25.465007968382352],"Fiji":[-178.94960173333334,-18.881178266666666],"Kiribati":[173.26603055454547,1.6698522636363635],"Marshall Adaları":[167.15464786956522,8.782336173913043],"Mikronezya":[151.66736777,8.56457333],"Nauru":[166.89041758,-0.5280164],"Palau":[132.75526132,5.17315599],"Papua Yeni Gine":[148.87223262428572,-6.895233347142858],"Samoa":[-172.13203718999998,-13.771896799999999],"Solomon Adaları":[158.63886992941178,-8.390132852941177],"Tonga":[-174.71516591666668,-19.918571358333335],"Tuvalu":[179.09127897142858,-8.638256],"Vanuatu":[168.3486257666667,-16.923076386666665],"Yeni Zelanda":[173.02211457530865,-40.729137560493825],"Çekya":[15.276788623287672,49.92303260684931],"Kuzey Kıbrıs Türk Cumhuriyeti":[33.53030866062992,35.148162903513025],"Güney Kıbrıs Rum Yönetimi":[33.16843669545777,35.04162726891413],"Filistin":[35.26,31.95]};
+const FLAG_MAP = {"Almanya":"de","Andorra":"ad","Arnavutluk":"al","Avusturya":"at","Belçika":"be","Beyaz Rusya":"by","Birleşik Krallık":"gb","Bosna-Hersek":"ba","Bulgaristan":"bg","Danimarka":"dk","Estonya":"ee","Finlandiya":"fi","Fransa":"fr","Hırvatistan":"hr","Hollanda":"nl","İrlanda":"ie","İspanya":"es","İsveç":"se","İsviçre":"ch","İtalya":"it","İzlanda":"is","Karadağ":"me","Kosova":"xk","Letonya":"lv","Lihtenştayn":"li","Litvanya":"lt","Lüksemburg":"lu","Macaristan":"hu","Kuzey Makedonya":"mk","Malta":"mt","Moldova":"md","Monako":"mc","Norveç":"no","Polonya":"pl","Portekiz":"pt","Romanya":"ro","Rusya":"ru","San Marino":"sm","Sırbistan":"rs","Slovakya":"sk","Slovenya":"si","Türkiye":"tr","Ukrayna":"ua","Vatikan":"va","Yunanistan":"gr","Afganistan":"af","Azerbaycan":"az","Bahreyn":"bh","Bangladeş":"bd","Bhutan":"bt","Birleşik Arap Emirlikleri":"ae","Myanmar":"mm","Brunei":"bn","Çin":"cn","Endonezya":"id","Ermenistan":"am","Filipinler":"ph","Güney Kore":"kr","Gürcistan":"ge","Hindistan":"in","Irak":"iq","İran":"ir","İsrail":"il","Japonya":"jp","Kamboçya":"kh","Katar":"qa","Kazakistan":"kz","Kırgızistan":"kg","Kuveyt":"kw","Kuzey Kore":"kp","Laos":"la","Lübnan":"lb","Maldivler":"mv","Malezya":"my","Moğolistan":"mn","Nepal":"np","Özbekistan":"uz","Pakistan":"pk","Singapur":"sg","Sri Lanka":"lk","Suriye":"sy","Suudi Arabistan":"sa","Tacikistan":"tj","Tayland":"th","Tayvan":"tw","Doğu Timor":"tl","Türkmenistan":"tm","Umman":"om","Ürdün":"jo","Vietnam":"vn","Yemen":"ye","Angola":"ao","Benin":"bj","Botsvana":"bw","Burkina Faso":"bf","Burundi":"bi","Yeşil Burun Adaları":"cv","Çad":"td","Cezayir":"dz","Cibuti":"dj","Kongo Demokratik Cumhuriyeti":"cd","Ekvator Ginesi":"gq","Eritre":"er","Esvatini":"sz","Etiyopya":"et","Fas":"ma","Fildişi Sahili":"ci","Gabon":"ga","Gambiya":"gm","Gana":"gh","Gine-Bissau":"gw","Gine":"gn","Güney Afrika":"za","Güney Sudan":"ss","Kamerun":"cm","Kenya":"ke","Komorlar":"km","Kongo Cumhuriyeti":"cg","Lesotho":"ls","Liberya":"lr","Libya":"ly","Madagaskar":"mg","Malavi":"mw","Mali":"ml","Mauritius":"mu","Mısır":"eg","Moritanya":"mr","Mozambik":"mz","Namibya":"na","Nijer":"ne","Nijerya":"ng","Orta Afrika Cumhuriyeti":"cf","Ruanda":"rw","São Tomé ve Príncipe":"st","Senegal":"sn","Seyşeller":"sc","Sierra Leone":"sl","Somali":"so","Sudan":"sd","Tanzanya":"tz","Togo":"tg","Tunus":"tn","Uganda":"ug","Zambiya":"zm","Zimbabve":"zw","Antigua ve Barbuda":"ag","Bahamalar":"bs","Barbados":"bb","Belize":"bz","Amerika Birleşik Devletleri":"us","Dominik Cumhuriyeti":"do","Dominika":"dm","El Salvador":"sv","Grenada":"gd","Guatemala":"gt","Haiti":"ht","Honduras":"hn","Jamaika":"jm","Kanada":"ca","Kosta Rika":"cr","Küba":"cu","Meksika":"mx","Nikaragua":"ni","Panama":"pa","Saint Kitts ve Nevis":"kn","Saint Lucia":"lc","Saint Vincent ve Grenadinler":"vc","Trinidad ve Tobago":"tt","Arjantin":"ar","Bolivya":"bo","Brezilya":"br","Ekvador":"ec","Guyana":"gy","Kolombiya":"co","Paraguay":"py","Peru":"pe","Şili":"cl","Surinam":"sr","Uruguay":"uy","Venezuela":"ve","Avustralya":"au","Fiji":"fj","Kiribati":"ki","Marshall Adaları":"mh","Mikronezya":"fm","Nauru":"nr","Palau":"pw","Papua Yeni Gine":"pg","Samoa":"ws","Solomon Adaları":"sb","Tonga":"to","Tuvalu":"tv","Vanuatu":"vu","Yeni Zelanda":"nz","Çekya":"cz","Kuzey Kıbrıs Türk Cumhuriyeti":"kktc","Güney Kıbrıs Rum Yönetimi":"cy","Filistin":"ps"};
+
+/* Kısaltma ve yaygın alternatif adlar (normalize edilmiş biçimde) */
+const ALIASES = Object.assign({"kktc":"Kuzey Kıbrıs Türk Cumhuriyeti","kuzey kibris":"Kuzey Kıbrıs Türk Cumhuriyeti","kuzey kibris turk cumhuriyeti":"Kuzey Kıbrıs Türk Cumhuriyeti","kuzey kibris turk cum":"Kuzey Kıbrıs Türk Cumhuriyeti","guney kibris":"Güney Kıbrıs Rum Yönetimi","kibris cumhuriyeti":"Güney Kıbrıs Rum Yönetimi"}, {
+  'abd': 'Amerika Birleşik Devletleri',
+  'amerika': 'Amerika Birleşik Devletleri',
+  'ingiltere': 'Birleşik Krallık',
+  'buyuk britanya': 'Birleşik Krallık',
+  'bae': 'Birleşik Arap Emirlikleri',
+  'cek cumhuriyeti': 'Çekya',
+  'demokratik kongo': 'Kongo Demokratik Cumhuriyeti',
+  'demokratik kongo cumhuriyeti': 'Kongo Demokratik Cumhuriyeti',
+  'kongo demokratik cumhuriyet': 'Kongo Demokratik Cumhuriyeti',
+  'kongo dc': 'Kongo Demokratik Cumhuriyeti',
+  'kdc': 'Kongo Demokratik Cumhuriyeti',
+  'kongo': 'Kongo Cumhuriyeti',
+  'suudi': 'Suudi Arabistan',
+  'hersek': 'Bosna-Hersek',
+  'st kitts': 'Saint Kitts ve Nevis',
+  'st lucia': 'Saint Lucia',
+  'st vincent': 'Saint Vincent ve Grenadinler',
+  'emirlikler': 'Birleşik Arap Emirlikleri',
+  'guney kore cumhuriyeti': 'Güney Kore',
+  'burma': 'Myanmar',
+  'makedonya': 'Kuzey Makedonya',
+  'papua': 'Papua Yeni Gine',
+  'sao tome': 'São Tomé ve Príncipe',
+  'saint kitts': 'Saint Kitts ve Nevis',
+  'saint vincent': 'Saint Vincent ve Grenadinler',
+  'trinidad': 'Trinidad ve Tobago',
+  'antigua': 'Antigua ve Barbuda',
+  'bosna': 'Bosna-Hersek',
+  'timor leste': 'Doğu Timor',
+  'kibris': 'Güney Kıbrıs Rum Yönetimi',
+  'gkry': 'Güney Kıbrıs Rum Yönetimi',
+  'rum kesimi': 'Güney Kıbrıs Rum Yönetimi',
+  'kibris rum kesimi': 'Güney Kıbrıs Rum Yönetimi',
+  'guney kibris rum cumhuriyeti': 'Güney Kıbrıs Rum Yönetimi',
+  'kibris cumhuriyeti': 'Güney Kıbrıs Rum Yönetimi',
+  'filistin devleti': 'Filistin',
+  'yesil burun': 'Yeşil Burun Adaları',
+  'cape verde': 'Yeşil Burun Adaları',
+  'kape verde': 'Yeşil Burun Adaları',
+  'orta afrika': 'Orta Afrika Cumhuriyeti',
+  'guney afrika cumhuriyeti': 'Güney Afrika',
+  'svaziland': 'Esvatini',
+  'fildisi': 'Fildişi Sahili',
+  'fildisi sahilleri': 'Fildişi Sahili'
+});
+
+/* ----------------------------------------------------------------------------
+   ÜLKE KÜNYELERİ — [başkent, yaklaşık nüfus, resmî dil(ler), yüzölçümü km²]
+   Nüfuslar 2024-25 tahminleridir ve karta "≈" işaretiyle yansır.
+   ---------------------------------------------------------------------------- */
+const COUNTRY_INFO = {
+  /* ---- AVRUPA ---- */
+  "Almanya": ["Berlin", 84500000, "Almanca", 357588],
+  "Andorra": ["Andorra la Vella", 82000, "Katalanca", 468],
+  "Arnavutluk": ["Tiran", 2740000, "Arnavutça", 28748],
+  "Avusturya": ["Viyana", 9130000, "Almanca", 83879],
+  "Belçika": ["Brüksel", 11800000, "Felemenkçe, Fransızca, Almanca", 30689],
+  "Beyaz Rusya": ["Minsk", 9100000, "Belarusça, Rusça", 207600],
+  "Birleşik Krallık": ["Londra", 68300000, "İngilizce", 243610],
+  "Bosna-Hersek": ["Saraybosna", 3200000, "Boşnakça, Sırpça, Hırvatça", 51209],
+  "Bulgaristan": ["Sofya", 6400000, "Bulgarca", 110994],
+  "Çekya": ["Prag", 10900000, "Çekçe", 78871],
+  "Danimarka": ["Kopenhag", 5980000, "Danca", 42933],
+  "Estonya": ["Tallinn", 1370000, "Estonca", 45228],
+  "Finlandiya": ["Helsinki", 5600000, "Fince, İsveççe", 338440],
+  "Fransa": ["Paris", 68400000, "Fransızca", 643801],
+  "Hırvatistan": ["Zagreb", 3850000, "Hırvatça", 56594],
+  "Hollanda": ["Amsterdam", 18000000, "Felemenkçe", 41850],
+  "İrlanda": ["Dublin", 5300000, "İrlandaca, İngilizce", 70273],
+  "İspanya": ["Madrid", 48600000, "İspanyolca", 505992],
+  "İsveç": ["Stokholm", 10600000, "İsveççe", 450295],
+  "İsviçre": ["Bern", 8900000, "Almanca, Fransızca, İtalyanca, Romanşça", 41285],
+  "İtalya": ["Roma", 58900000, "İtalyanca", 301340],
+  "İzlanda": ["Reykjavik", 390000, "İzlandaca", 103000],
+  "Karadağ": ["Podgorica", 620000, "Karadağca", 13812],
+  "Kosova": ["Priştine", 1760000, "Arnavutça, Sırpça", 10887],
+  "Letonya": ["Riga", 1870000, "Letonca", 64589],
+  "Lihtenştayn": ["Vaduz", 40000, "Almanca", 160],
+  "Litvanya": ["Vilnius", 2890000, "Litvanca", 65300],
+  "Lüksemburg": ["Lüksemburg", 672000, "Lüksemburgca, Fransızca, Almanca", 2586],
+  "Macaristan": ["Budapeşte", 9580000, "Macarca", 93028],
+  "Kuzey Makedonya": ["Üsküp", 1830000, "Makedonca, Arnavutça", 25713],
+  "Malta": ["Valletta", 553000, "Maltaca, İngilizce", 316],
+  "Moldova": ["Kişinev", 2420000, "Rumence", 33846],
+  "Monako": ["Monako", 39000, "Fransızca", 2],
+  "Norveç": ["Oslo", 5570000, "Norveççe", 385207],
+  "Polonya": ["Varşova", 36600000, "Lehçe", 312696],
+  "Portekiz": ["Lizbon", 10600000, "Portekizce", 92212],
+  "Romanya": ["Bükreş", 19050000, "Rumence", 238397],
+  "Rusya": ["Moskova", 146000000, "Rusça", 17098246],
+  "San Marino": ["San Marino", 34000, "İtalyanca", 61],
+  "Sırbistan": ["Belgrad", 6600000, "Sırpça", 77474],
+  "Slovakya": ["Bratislava", 5420000, "Slovakça", 49035],
+  "Slovenya": ["Lübliyana", 2120000, "Slovence", 20273],
+  "Türkiye": ["Ankara", 85700000, "Türkçe", 783562],
+  "Ukrayna": ["Kiev", 37000000, "Ukraynaca", 603500],
+  "Vatikan": ["Vatikan", 800, "İtalyanca, Latince", 0.49],
+  "Yunanistan": ["Atina", 10400000, "Yunanca", 131957],
+
+  /* ---- ASYA ---- */
+  "Afganistan": ["Kabil", 41500000, "Peştuca, Darice", 652867],
+  "Azerbaycan": ["Bakü", 10200000, "Azerbaycanca", 86600],
+  "Bahreyn": ["Manama", 1500000, "Arapça", 786],
+  "Bangladeş": ["Dakka", 172000000, "Bengalce", 148460],
+  "Bhutan": ["Timpu", 790000, "Dzongkha", 38394],
+  "Birleşik Arap Emirlikleri": ["Abu Dabi", 10000000, "Arapça", 83600],
+  "Brunei": ["Bandar Seri Begavan", 460000, "Malayca", 5765],
+  "Çin": ["Pekin", 1410000000, "Çince (Mandarin)", 9596961],
+  "Doğu Timor": ["Dili", 1360000, "Tetum, Portekizce", 14874],
+  "Endonezya": ["Cakarta", 280000000, "Endonezce", 1904569],
+  "Ermenistan": ["Erivan", 2990000, "Ermenice", 29743],
+  "Filipinler": ["Manila", 114000000, "Filipince, İngilizce", 300000],
+  "Güney Kore": ["Seul", 51700000, "Korece", 100210],
+  "Gürcistan": ["Tiflis", 3730000, "Gürcüce", 69700],
+  "Hindistan": ["Yeni Delhi", 1440000000, "Hintçe, İngilizce", 3287263],
+  "Irak": ["Bağdat", 44500000, "Arapça, Kürtçe", 438317],
+  "İran": ["Tahran", 89000000, "Farsça", 1648195],
+  "İsrail": ["Tel Aviv", 9800000, "İbranice", 22072],
+  "Filistin": ["Doğu Kudüs", 5500000, "Arapça", 6020, "BM gözlemci devleti · TC tanır"],
+  "Japonya": ["Tokyo", 124000000, "Japonca", 377975],
+  "Kamboçya": ["Phnom Penh", 17000000, "Khmerce", 181035],
+  "Katar": ["Doha", 2700000, "Arapça", 11586],
+  "Kazakistan": ["Astana", 20000000, "Kazakça, Rusça", 2724900],
+  "Kırgızistan": ["Bişkek", 7000000, "Kırgızca, Rusça", 199951],
+  "Güney Kıbrıs Rum Yönetimi": ["Lefkoşa", 920000, "Yunanca, Türkçe", 5896],
+  "Kuzey Kıbrıs Türk Cumhuriyeti": ["Lefkoşa", 390000, "Türkçe", 3355, "Tanınma: yalnızca TC"],
+  "Kuveyt": ["Kuveyt", 4300000, "Arapça", 17818],
+  "Kuzey Kore": ["Pyongyang", 26000000, "Korece", 120538],
+  "Laos": ["Vientiane", 7600000, "Laoca", 236800],
+  "Lübnan": ["Beyrut", 5400000, "Arapça", 10452],
+  "Maldivler": ["Male", 520000, "Divehice", 300],
+  "Malezya": ["Kuala Lumpur", 34000000, "Malayca", 330803],
+  "Moğolistan": ["Ulan Batur", 3500000, "Moğolca", 1564116],
+  "Myanmar": ["Naypyidaw", 54500000, "Birmanca", 676578],
+  "Nepal": ["Katmandu", 30000000, "Nepalce", 147181],
+  "Özbekistan": ["Taşkent", 36000000, "Özbekçe", 448978],
+  "Pakistan": ["İslamabad", 240000000, "Urduca, İngilizce", 881913],
+  "Singapur": ["Singapur", 5900000, "İngilizce, Malayca, Çince, Tamilce", 728],
+  "Sri Lanka": ["Sri Cayavardenepura Kotte", 22000000, "Sinhalce, Tamilce", 65610],
+  "Suriye": ["Şam", 23000000, "Arapça", 185180],
+  "Suudi Arabistan": ["Riyad", 33000000, "Arapça", 2149690],
+  "Tacikistan": ["Duşanbe", 10100000, "Tacikçe", 141400],
+  "Tayland": ["Bangkok", 71800000, "Tayca", 513120],
+  "Tayvan": ["Taipei", 23400000, "Çince (Mandarin)", 36197, "Tanınma: sınırlı (TC tanımıyor)"],
+  "Türkmenistan": ["Aşkabat", 6500000, "Türkmence", 488100],
+  "Umman": ["Maskat", 5100000, "Arapça", 309500],
+  "Ürdün": ["Amman", 11400000, "Arapça", 89342],
+  "Vietnam": ["Hanoi", 100000000, "Vietnamca", 331212],
+  "Yemen": ["Sana", 34500000, "Arapça", 527968],
+
+  /* ---- AFRİKA ---- */
+  "Angola": ["Luanda", 36500000, "Portekizce", 1246700],
+  "Benin": ["Porto-Novo", 13700000, "Fransızca", 114763],
+  "Botsvana": ["Gaborone", 2500000, "İngilizce, Setsvana", 581730],
+  "Burkina Faso": ["Vagadugu", 23000000, "Fransızca", 274222],
+  "Burundi": ["Gitega", 13200000, "Kirundice, Fransızca", 27834],
+  "Cezayir": ["Cezayir", 45600000, "Arapça, Berberice", 2381741],
+  "Cibuti": ["Cibuti", 1100000, "Fransızca, Arapça", 23200],
+  "Çad": ["Ncamena", 18300000, "Fransızca, Arapça", 1284000],
+  "Ekvator Ginesi": ["Malabo", 1700000, "İspanyolca, Fransızca, Portekizce", 28051],
+  "Eritre": ["Asmara", 3700000, "Tigrinya, Arapça, İngilizce", 117600],
+  "Esvatini": ["Mbabane", 1220000, "Svazice, İngilizce", 17364],
+  "Etiyopya": ["Addis Ababa", 127000000, "Amharca", 1104300],
+  "Fas": ["Rabat", 37500000, "Arapça, Berberice", 446550],
+  "Fildişi Sahili": ["Yamoussoukro", 29000000, "Fransızca", 322463],
+  "Gabon": ["Librevil", 2440000, "Fransızca", 267668],
+  "Gambiya": ["Banjul", 2770000, "İngilizce", 11295],
+  "Gana": ["Akra", 34000000, "İngilizce", 238533],
+  "Gine": ["Konakri", 14500000, "Fransızca", 245857],
+  "Gine-Bissau": ["Bissau", 2150000, "Portekizce", 36125],
+  "Güney Afrika": ["Pretoria, Cape Town, Bloemfontein", 62000000, "11 resmî dil (Zuluca, İngilizce, Afrikaanca…)", 1221037],
+  "Güney Sudan": ["Cuba", 11100000, "İngilizce", 644329],
+  "Kamerun": ["Yaunde", 28600000, "Fransızca, İngilizce", 475442],
+  "Kenya": ["Nairobi", 55100000, "Svahili, İngilizce", 580367],
+  "Komorlar": ["Moroni", 850000, "Komorca, Arapça, Fransızca", 1861],
+  "Kongo Cumhuriyeti": ["Brazavil", 6100000, "Fransızca", 342000],
+  "Kongo Demokratik Cumhuriyeti": ["Kinşasa", 102000000, "Fransızca", 2344858],
+  "Lesotho": ["Maseru", 2300000, "Sotho dili, İngilizce", 30355],
+  "Liberya": ["Monrovia", 5400000, "İngilizce", 111369],
+  "Libya": ["Trablus", 6900000, "Arapça", 1759541],
+  "Madagaskar": ["Antananarivo", 30300000, "Malgaşça, Fransızca", 587041],
+  "Malavi": ["Lilongve", 21000000, "İngilizce, Çevaca", 118484],
+  "Mali": ["Bamako", 23300000, "Bambara ve ulusal diller", 1240192],
+  "Mauritius": ["Port Louis", 1260000, "İngilizce, Fransızca, Morisyen", 2040],
+  "Mısır": ["Kahire", 106000000, "Arapça", 1001450],
+  "Moritanya": ["Nuakşot", 4900000, "Arapça", 1030700],
+  "Mozambik": ["Maputo", 34000000, "Portekizce", 801590],
+  "Namibya": ["Vindhuk", 2600000, "İngilizce", 825615],
+  "Nijer": ["Niamey", 27200000, "Fransızca", 1267000],
+  "Nijerya": ["Abuja", 227000000, "İngilizce", 923768],
+  "Orta Afrika Cumhuriyeti": ["Bangui", 5700000, "Fransızca, Sango", 622984],
+  "Ruanda": ["Kigali", 14100000, "Kinyarwanda, İngilizce, Fransızca", 26338],
+  "São Tomé ve Príncipe": ["São Tomé", 230000, "Portekizce", 964],
+  "Senegal": ["Dakar", 18200000, "Fransızca", 196722],
+  "Seyşeller": ["Victoria", 100000, "Seyşel Kreyolu, İngilizce, Fransızca", 452],
+  "Sierra Leone": ["Freetown", 8800000, "İngilizce", 71740],
+  "Somali": ["Mogadişu", 18100000, "Somalice, Arapça", 637657],
+  "Sudan": ["Hartum", 49000000, "Arapça, İngilizce", 1861484],
+  "Tanzanya": ["Dodoma", 67400000, "Svahili, İngilizce", 947303],
+  "Togo": ["Lome", 9100000, "Fransızca", 56785],
+  "Tunus": ["Tunus", 12300000, "Arapça", 163610],
+  "Uganda": ["Kampala", 48600000, "İngilizce, Svahili", 241550],
+  "Yeşil Burun Adaları": ["Praia", 570000, "Portekizce", 4033],
+  "Zambiya": ["Lusaka", 20600000, "İngilizce", 752612],
+  "Zimbabve": ["Harare", 16600000, "İngilizce, Şona, Ndebele", 390757],
+
+  /* ---- KUZEY AMERİKA ---- */
+  "Amerika Birleşik Devletleri": ["Washington, D.C.", 335000000, "İngilizce", 9833517],
+  "Antigua ve Barbuda": ["Saint John's", 100000, "İngilizce", 442],
+  "Bahamalar": ["Nassau", 410000, "İngilizce", 13943],
+  "Barbados": ["Bridgetown", 282000, "İngilizce", 430],
+  "Belize": ["Belmopan", 410000, "İngilizce", 22966],
+  "Dominik Cumhuriyeti": ["Santo Domingo", 11300000, "İspanyolca", 48671],
+  "Dominika": ["Roseau", 73000, "İngilizce", 751],
+  "El Salvador": ["San Salvador", 6300000, "İspanyolca", 21041],
+  "Grenada": ["Saint George's", 126000, "İngilizce", 344],
+  "Guatemala": ["Guatemala", 18100000, "İspanyolca", 108889],
+  "Haiti": ["Port-au-Prince", 11700000, "Fransızca, Haiti Kreyolu", 27750],
+  "Honduras": ["Tegucigalpa", 10600000, "İspanyolca", 112492],
+  "Jamaika": ["Kingston", 2830000, "İngilizce", 10991],
+  "Kanada": ["Ottava", 40000000, "İngilizce, Fransızca", 9984670],
+  "Kosta Rika": ["San Jose", 5200000, "İspanyolca", 51100],
+  "Küba": ["Havana", 11000000, "İspanyolca", 109884],
+  "Meksika": ["Meksiko", 129000000, "İspanyolca", 1964375],
+  "Nikaragua": ["Managua", 7000000, "İspanyolca", 130373],
+  "Panama": ["Panama", 4500000, "İspanyolca", 75417],
+  "Saint Kitts ve Nevis": ["Basseterre", 48000, "İngilizce", 261],
+  "Saint Lucia": ["Castries", 180000, "İngilizce", 616],
+  "Saint Vincent ve Grenadinler": ["Kingstown", 104000, "İngilizce", 389],
+  "Trinidad ve Tobago": ["Port of Spain", 1530000, "İngilizce", 5130],
+
+  /* ---- GÜNEY AMERİKA ---- */
+  "Arjantin": ["Buenos Aires", 46600000, "İspanyolca", 2780400],
+  "Bolivya": ["Sucre (hükümet: La Paz)", 12400000, "İspanyolca, Keçuva, Aymara", 1098581],
+  "Brezilya": ["Brasilia", 216000000, "Portekizce", 8515767],
+  "Ekvador": ["Kito", 18000000, "İspanyolca", 283561],
+  "Guyana": ["Georgetown", 810000, "İngilizce", 214969],
+  "Kolombiya": ["Bogota", 52200000, "İspanyolca", 1141748],
+  "Paraguay": ["Asunción", 6900000, "İspanyolca, Guaranice", 406752],
+  "Peru": ["Lima", 34000000, "İspanyolca, Keçuva", 1285216],
+  "Surinam": ["Paramaribo", 620000, "Felemenkçe", 163820],
+  "Şili": ["Santiago", 19700000, "İspanyolca", 756102],
+  "Uruguay": ["Montevideo", 3400000, "İspanyolca", 176215],
+  "Venezuela": ["Karakas", 28400000, "İspanyolca", 916445],
+
+  /* ---- OKYANUSYA ---- */
+  "Avustralya": ["Kanberra", 26700000, "İngilizce", 7692024],
+  "Fiji": ["Suva", 930000, "İngilizce, Fiji dili, Hintçe", 18274],
+  "Kiribati": ["Güney Tarava", 130000, "Kiribatice, İngilizce", 811],
+  "Marshall Adaları": ["Majuro", 42000, "Marşalca, İngilizce", 181],
+  "Mikronezya": ["Palikir", 113000, "İngilizce", 702],
+  "Nauru": ["Yaren (fiilî)", 12000, "Nauru dili, İngilizce", 21],
+  "Palau": ["Ngerulmud", 18000, "Palauca, İngilizce", 459],
+  "Papua Yeni Gine": ["Port Moresby", 10300000, "Tok Pisin, İngilizce, Hiri Motu", 462840],
+  "Samoa": ["Apia", 220000, "Samoaca, İngilizce", 2842],
+  "Solomon Adaları": ["Honiara", 740000, "İngilizce", 28896],
+  "Tonga": ["Nuku'alofa", 107000, "Tonga dili, İngilizce", 747],
+  "Tuvalu": ["Funafuti", 11000, "Tuvalca, İngilizce", 26],
+  "Vanuatu": ["Port Vila", 330000, "Bislama, İngilizce, Fransızca", 12189],
+  "Yeni Zelanda": ["Wellington", 5300000, "İngilizce, Maorice", 270467]
+};
+
+/* ----------------------------------------------------------------------------
+   YEREL ADLAR (endonimler) — ülkenin kendi dil ve alfabesindeki adı,
+   künyede Türkçe adın hemen altında küçük fontla gösterilir.
+   Türkçe adla birebir aynı olanlar (Türkiye, Tonga…) listede yoktur.
+   ---------------------------------------------------------------------------- */
+const NATIVE_NAME = {
+  /* Avrupa */
+  "Almanya": "Deutschland", "Arnavutluk": "Shqipëria", "Avusturya": "Österreich",
+  "Belçika": "België · Belgique", "Beyaz Rusya": "Беларусь",
+  "Birleşik Krallık": "United Kingdom", "Bosna-Hersek": "Bosna i Hercegovina",
+  "Bulgaristan": "България", "Çekya": "Česko", "Danimarka": "Danmark",
+  "Estonya": "Eesti", "Finlandiya": "Suomi", "Fransa": "France",
+  "Hırvatistan": "Hrvatska", "Hollanda": "Nederland", "İrlanda": "Éire · Ireland",
+  "İspanya": "España", "İsveç": "Sverige", "İsviçre": "Schweiz · Suisse",
+  "İtalya": "Italia", "İzlanda": "Ísland", "Karadağ": "Crna Gora",
+  "Kosova": "Kosovë", "Letonya": "Latvija", "Lihtenştayn": "Liechtenstein",
+  "Litvanya": "Lietuva", "Lüksemburg": "Lëtzebuerg", "Macaristan": "Magyarország",
+  "Kuzey Makedonya": "Северна Македонија", "Norveç": "Norge", "Polonya": "Polska",
+  "Portekiz": "Portugal", "Romanya": "România", "Rusya": "Россия",
+  "Sırbistan": "Србија", "Slovakya": "Slovensko", "Slovenya": "Slovenija",
+  "Ukrayna": "Україна", "Vatikan": "Città del Vaticano", "Yunanistan": "Ελλάδα",
+  /* Asya */
+  "Afganistan": "افغانستان", "Azerbaycan": "Azərbaycan", "Bahreyn": "البحرين",
+  "Bangladeş": "বাংলাদেশ", "Bhutan": "འབྲུག་ཡུལ", "Birleşik Arap Emirlikleri": "الإمارات",
+  "Brunei": "Brunei Darussalam", "Çin": "中国", "Doğu Timor": "Timor-Leste",
+  "Endonezya": "Indonesia", "Ermenistan": "Հայաստան", "Filipinler": "Pilipinas",
+  "Filistin": "فلسطين", "Güney Kıbrıs Rum Yönetimi": "Κύπρος",
+  "Güney Kore": "대한민국", "Gürcistan": "საქართველო", "Hindistan": "भारत · India",
+  "Irak": "العراق", "İran": "ایران", "İsrail": "ישראל", "Japonya": "日本",
+  "Kamboçya": "កម្ពុជា", "Katar": "قطر", "Kazakistan": "Қазақстан",
+  "Kırgızistan": "Кыргызстан", "Kuveyt": "الكويت", "Kuzey Kore": "조선",
+  "Laos": "ລາວ", "Lübnan": "لبنان", "Maldivler": "ދިވެހިރާއްޖެ",
+  "Malezya": "Malaysia", "Moğolistan": "Монгол Улс", "Myanmar": "မြန်မာ",
+  "Nepal": "नेपाल", "Özbekistan": "Oʻzbekiston", "Pakistan": "پاکستان",
+  "Singapur": "Singapura · 新加坡", "Sri Lanka": "ශ්‍රී ලංකා · இலங்கை",
+  "Suriye": "سوريا", "Suudi Arabistan": "السعودية", "Tacikistan": "Тоҷикистон",
+  "Tayland": "ประเทศไทย", "Tayvan": "台灣", "Umman": "عُمان", "Ürdün": "الأردن",
+  "Vietnam": "Việt Nam", "Yemen": "اليمن",
+  /* Afrika */
+  "Benin": "Bénin", "Botsvana": "Botswana", "Burundi": "Uburundi",
+  "Cezayir": "الجزائر", "Cibuti": "Djibouti · جيبوتي", "Çad": "Tchad · تشاد",
+  "Ekvator Ginesi": "Guinea Ecuatorial", "Eritre": "ኤርትራ", "Esvatini": "eSwatini",
+  "Etiyopya": "ኢትዮጵያ", "Fas": "المغرب", "Fildişi Sahili": "Côte d'Ivoire",
+  "Gambiya": "The Gambia", "Gana": "Ghana", "Gine": "Guinée",
+  "Gine-Bissau": "Guiné-Bissau", "Güney Afrika": "South Africa",
+  "Güney Sudan": "South Sudan", "Kamerun": "Cameroun", "Komorlar": "Komori · جزر القمر",
+  "Kongo Cumhuriyeti": "Congo", "Kongo Demokratik Cumhuriyeti": "RD Congo",
+  "Liberya": "Liberia", "Libya": "ليبيا", "Madagaskar": "Madagasikara",
+  "Malavi": "Malawi", "Mauritius": "Mauritius · Maurice", "Mısır": "مصر",
+  "Moritanya": "موريتانيا", "Mozambik": "Moçambique", "Namibya": "Namibia",
+  "Nijer": "Niger", "Nijerya": "Nigeria", "Orta Afrika Cumhuriyeti": "République Centrafricaine",
+  "Ruanda": "Rwanda", "São Tomé ve Príncipe": "São Tomé e Príncipe",
+  "Senegal": "Sénégal", "Seyşeller": "Sesel · Seychelles", "Somali": "Soomaaliya",
+  "Sudan": "السودان", "Tanzanya": "Tanzania", "Tunus": "تونس",
+  "Yeşil Burun Adaları": "Cabo Verde", "Zambiya": "Zambia", "Zimbabve": "Zimbabwe",
+  /* Kuzey Amerika */
+  "Amerika Birleşik Devletleri": "United States of America",
+  "Antigua ve Barbuda": "Antigua and Barbuda", "Bahamalar": "The Bahamas",
+  "Dominik Cumhuriyeti": "República Dominicana", "Dominika": "Dominica",
+  "Haiti": "Haïti · Ayiti", "Jamaika": "Jamaica", "Kanada": "Canada",
+  "Kosta Rika": "Costa Rica", "Küba": "Cuba", "Meksika": "México",
+  "Nikaragua": "Nicaragua", "Panama": "Panamá",
+  "Saint Kitts ve Nevis": "Saint Kitts and Nevis",
+  "Saint Vincent ve Grenadinler": "Saint Vincent and the Grenadines",
+  "Trinidad ve Tobago": "Trinidad and Tobago",
+  /* Güney Amerika */
+  "Arjantin": "Argentina", "Bolivya": "Bolivia", "Brezilya": "Brasil",
+  "Ekvador": "Ecuador", "Kolombiya": "Colombia", "Peru": "Perú",
+  "Surinam": "Suriname", "Şili": "Chile",
+  /* Okyanusya */
+  "Avustralya": "Australia", "Fiji": "Viti · Fiji", "Marshall Adaları": "Marshall Islands",
+  "Mikronezya": "Micronesia", "Nauru": "Naoero", "Palau": "Belau · Palau",
+  "Papua Yeni Gine": "Papua Niugini", "Samoa": "Sāmoa",
+  "Solomon Adaları": "Solomon Islands", "Yeni Zelanda": "New Zealand · Aotearoa"
+};
+
+/* ----------------------------------------------------------------------------
+   ALFABELER — künyede hangi yazı sisteminin kullanıldığı, örnek harflerle
+   gösterilir. COUNTRY_SCRIPT'te yer almayan tüm ülkeler Latin alfabesi kullanır.
+   ---------------------------------------------------------------------------- */
+const SCRIPTS = {
+  latin:        ["Latin alfabesi", "Aa Bb Cc Dd"],
+  kiril:        ["Kiril alfabesi", "Аа Бб Вв Гг Дд"],
+  kiril_latin:  ["Kiril + Latin", "Аа Бб · Aa Bb"],
+  latin_kiril:  ["Latin + Kiril", "Aa Bb · Аа Бб"],
+  kiril_gecis:  ["Kiril (Latin'e geçiş sürecinde)", "Аа Бб → Aa Bb"],
+  yunan:        ["Yunan alfabesi", "Αα Ββ Γγ Δδ"],
+  yunan_latin:  ["Yunan + Latin", "Αα Ββ · Aa Bb"],
+  arap:         ["Arap alfabesi", "ا ب ت ث ج ح"],
+  arap_latin:   ["Arap + Latin", "ا ب ت · Aa Bb"],
+  arap_tifinagh:["Arap + Tifinagh (Berberî)", "ا ب · ⵜⵉⴼⵉⵏⴰⵖ"],
+  fars:         ["Fars-Arap alfabesi", "ا ب پ ت ث ج چ"],
+  nastalik:     ["Arap (Nastalik) alfabesi", "اُردُو ا ب پ ٹ"],
+  ibrani:       ["İbrani alfabesi", "א ב ג ד ה"],
+  devanagari:   ["Devanagari", "अ आ इ क ख ग"],
+  hint_coklu:   ["Devanagari + bölgesel yazılar", "अ आ · த · బ · ਗ"],
+  bengal:       ["Bengal alfabesi", "অ আ ক খ গ"],
+  sinhala_tamil:["Sinhala + Tamil", "අ ආ · அ ஆ"],
+  thai:         ["Tay alfabesi", "ก ข ค ง จ"],
+  lao:          ["Lao alfabesi", "ກ ຂ ຄ ງ ຈ"],
+  khmer:        ["Khmer alfabesi", "ក ខ គ ឃ ង"],
+  myanmar:      ["Myanmar alfabesi", "က ခ ဂ ဃ င"],
+  tibet:        ["Tibet alfabesi (Dzongkha)", "ཀ ཁ ག ང ཅ"],
+  gurcu:        ["Gürcü alfabesi", "ა ბ გ დ ე"],
+  ermeni:       ["Ermeni alfabesi", "Ա Բ Գ Դ Ե"],
+  geez:         ["Geez alfabesi", "ሀ ለ ሐ መ ሠ"],
+  han:          ["Çin yazısı (Han)", "中文 · 汉字"],
+  han_trad:     ["Çin yazısı (Geleneksel Han)", "中文 · 漢字"],
+  japon:        ["Kanji + Kana", "日本語 · ひらがな カタカナ"],
+  hangul:       ["Hangıl (Kore alfabesi)", "한글 · ㄱ ㄴ ㄷ ㄹ"],
+  thaana:       ["Thaana alfabesi", "ހ ށ ނ ރ ބ"],
+  mogol:        ["Kiril (+ geleneksel Moğol yazısı)", "Аа Бб · ᠮᠣᠩᠭᠣᠯ"],
+  coklu_sg:     ["Latin + Çin + Tamil", "Aa · 中文 · தமிழ்"]
+};
+const COUNTRY_SCRIPT = {
+  /* Kiril ve karışık */
+  "Rusya": "kiril", "Ukrayna": "kiril", "Beyaz Rusya": "kiril", "Bulgaristan": "kiril",
+  "Kuzey Makedonya": "kiril", "Kırgızistan": "kiril", "Tacikistan": "kiril",
+  "Sırbistan": "kiril_latin", "Karadağ": "kiril_latin", "Bosna-Hersek": "latin_kiril",
+  "Kazakistan": "kiril_gecis", "Moğolistan": "mogol",
+  /* Yunan */
+  "Yunanistan": "yunan", "Güney Kıbrıs Rum Yönetimi": "yunan_latin",
+  /* Arap ve türevleri */
+  "Suudi Arabistan": "arap", "Yemen": "arap", "Umman": "arap",
+  "Birleşik Arap Emirlikleri": "arap", "Katar": "arap", "Bahreyn": "arap",
+  "Kuveyt": "arap", "Irak": "arap", "Suriye": "arap", "Ürdün": "arap",
+  "Lübnan": "arap", "Filistin": "arap", "Mısır": "arap", "Libya": "arap",
+  "Tunus": "arap", "Moritanya": "arap", "Sudan": "arap",
+  "Cezayir": "arap_tifinagh", "Fas": "arap_tifinagh",
+  "Cibuti": "arap_latin", "Çad": "arap_latin", "Komorlar": "arap_latin", "Somali": "arap_latin",
+  "İran": "fars", "Afganistan": "fars", "Pakistan": "nastalik", "Maldivler": "thaana",
+  /* Diğer */
+  "İsrail": "ibrani",
+  "Hindistan": "hint_coklu", "Nepal": "devanagari", "Bangladeş": "bengal",
+  "Sri Lanka": "sinhala_tamil", "Bhutan": "tibet", "Myanmar": "myanmar",
+  "Tayland": "thai", "Laos": "lao", "Kamboçya": "khmer",
+  "Çin": "han", "Tayvan": "han_trad", "Japonya": "japon",
+  "Güney Kore": "hangul", "Kuzey Kore": "hangul", "Singapur": "coklu_sg",
+  "Gürcistan": "gurcu", "Ermenistan": "ermeni", "Etiyopya": "geez", "Eritre": "geez"
+};
+
+/* ----------------------------------------------------------------------------
+   NATURAL EARTH EŞLEŞTİRME TABLOLARI
+   world-atlas verisindeki her ülkenin "id" alanı ISO 3166-1 sayısal kodudur.
+   Kodu -99 olan (tartışmalı) kayıtlar NE_NAME_FIX ile ada göre eşlenir.
+   Aynı oyun adına eşlenen birden çok kayıt (ör. Fas + Batı Sahra) topojson
+   birleştirmesiyle TEK ülkeye dönüştürülür — eski oyundaki görünümle birebir.
+   Eşleşmeyen kayıtlar (Grönland, Antarktika vb.) oyuna dahil edilmez;
+   uydu dokusunda kara olarak görünmeye devam ederler.
+   ---------------------------------------------------------------------------- */
+const NE_ID_TO_GAME = {
+  /* Avrupa */
+  276: "Almanya", 20: "Andorra", 8: "Arnavutluk", 40: "Avusturya", 56: "Belçika",
+  112: "Beyaz Rusya", 826: "Birleşik Krallık", 70: "Bosna-Hersek", 100: "Bulgaristan",
+  203: "Çekya", 208: "Danimarka", 233: "Estonya", 246: "Finlandiya", 250: "Fransa",
+  191: "Hırvatistan", 528: "Hollanda", 372: "İrlanda", 724: "İspanya", 752: "İsveç",
+  756: "İsviçre", 380: "İtalya", 352: "İzlanda", 499: "Karadağ", 428: "Letonya",
+  438: "Lihtenştayn", 440: "Litvanya", 442: "Lüksemburg", 348: "Macaristan",
+  807: "Kuzey Makedonya", 470: "Malta", 498: "Moldova", 492: "Monako", 578: "Norveç",
+  616: "Polonya", 620: "Portekiz", 642: "Romanya", 643: "Rusya", 674: "San Marino",
+  688: "Sırbistan", 703: "Slovakya", 705: "Slovenya", 792: "Türkiye", 804: "Ukrayna",
+  336: "Vatikan", 300: "Yunanistan",
+  /* Asya */
+  4: "Afganistan", 31: "Azerbaycan", 48: "Bahreyn", 50: "Bangladeş", 64: "Bhutan",
+  784: "Birleşik Arap Emirlikleri", 104: "Myanmar", 96: "Brunei", 156: "Çin",
+  360: "Endonezya", 51: "Ermenistan", 608: "Filipinler", 410: "Güney Kore",
+  268: "Gürcistan", 356: "Hindistan", 368: "Irak", 364: "İran", 376: "İsrail",
+  392: "Japonya", 116: "Kamboçya", 634: "Katar", 398: "Kazakistan", 417: "Kırgızistan",
+  196: "Güney Kıbrıs Rum Yönetimi", 275: "Filistin",
+  414: "Kuveyt", 408: "Kuzey Kore", 418: "Laos", 422: "Lübnan", 462: "Maldivler",
+  458: "Malezya", 496: "Moğolistan", 524: "Nepal", 860: "Özbekistan", 586: "Pakistan",
+  702: "Singapur", 144: "Sri Lanka", 760: "Suriye", 682: "Suudi Arabistan",
+  762: "Tacikistan", 764: "Tayland", 158: "Tayvan", 626: "Doğu Timor",
+  795: "Türkmenistan", 512: "Umman", 400: "Ürdün", 704: "Vietnam", 887: "Yemen",
+  /* Afrika */
+  24: "Angola", 204: "Benin", 72: "Botsvana", 854: "Burkina Faso", 108: "Burundi",
+  132: "Yeşil Burun Adaları", 148: "Çad", 12: "Cezayir", 262: "Cibuti",
+  180: "Kongo Demokratik Cumhuriyeti", 226: "Ekvator Ginesi", 232: "Eritre",
+  748: "Esvatini", 231: "Etiyopya", 504: "Fas", 732: "Fas" /* Batı Sahra → Fas'a birleşir */,
+  384: "Fildişi Sahili", 266: "Gabon", 270: "Gambiya", 288: "Gana", 624: "Gine-Bissau",
+  324: "Gine", 710: "Güney Afrika", 728: "Güney Sudan", 120: "Kamerun", 404: "Kenya",
+  174: "Komorlar", 178: "Kongo Cumhuriyeti", 426: "Lesotho", 430: "Liberya",
+  434: "Libya", 450: "Madagaskar", 454: "Malavi", 466: "Mali", 480: "Mauritius",
+  818: "Mısır", 478: "Moritanya", 508: "Mozambik", 516: "Namibya", 562: "Nijer",
+  566: "Nijerya", 140: "Orta Afrika Cumhuriyeti", 646: "Ruanda",
+  678: "São Tomé ve Príncipe", 686: "Senegal", 690: "Seyşeller", 694: "Sierra Leone",
+  706: "Somali", 729: "Sudan", 736: "Sudan" /* eski kod */, 834: "Tanzanya",
+  768: "Togo", 788: "Tunus", 800: "Uganda", 894: "Zambiya", 716: "Zimbabve",
+  /* Kuzey Amerika */
+  28: "Antigua ve Barbuda", 44: "Bahamalar", 52: "Barbados", 84: "Belize",
+  840: "Amerika Birleşik Devletleri", 214: "Dominik Cumhuriyeti", 212: "Dominika",
+  222: "El Salvador", 308: "Grenada", 320: "Guatemala", 332: "Haiti", 340: "Honduras",
+  388: "Jamaika", 124: "Kanada", 188: "Kosta Rika", 192: "Küba", 484: "Meksika",
+  558: "Nikaragua", 591: "Panama", 659: "Saint Kitts ve Nevis", 662: "Saint Lucia",
+  670: "Saint Vincent ve Grenadinler", 780: "Trinidad ve Tobago",
+  /* Güney Amerika */
+  32: "Arjantin", 68: "Bolivya", 76: "Brezilya", 218: "Ekvador", 328: "Guyana",
+  170: "Kolombiya", 600: "Paraguay", 604: "Peru", 152: "Şili", 740: "Surinam",
+  858: "Uruguay", 862: "Venezuela",
+  /* Okyanusya */
+  36: "Avustralya", 242: "Fiji", 296: "Kiribati", 584: "Marshall Adaları",
+  583: "Mikronezya", 520: "Nauru", 585: "Palau", 598: "Papua Yeni Gine",
+  882: "Samoa", 90: "Solomon Adaları", 776: "Tonga", 798: "Tuvalu",
+  548: "Vanuatu", 554: "Yeni Zelanda"
+};
+
+/* id'si -99 (veya boş) olan Natural Earth kayıtları — ada göre eşleme.
+   null → oyuna dahil edilmez.
+   NOT: Kıbrıs ve KKTC de Natural Earth KARA sınırlarından gelir. Kullanıcının
+   OSM dosyaları denendi ancak karasuları (12 mil deniz sınırı) içerdikleri
+   anlaşıldı — denizler ülke gibi görünüyordu; bu yüzden elendi. */
+const NE_NAME_FIX = {
+  "Kosovo": "Kosova",
+  "Somaliland": "Somali",          /* Somali'ye birleşir (eski oyunla aynı) */
+  "W. Sahara": "Fas",              /* Fas'a birleşir (eski oyunla aynı)     */
+  "Western Sahara": "Fas",
+  "Norway": "Norveç",
+  "France": "Fransa",
+  "Kazakhstan": "Kazakistan",
+  "N. Cyprus": "Kuzey Kıbrıs Türk Cumhuriyeti",
+  "Northern Cyprus": "Kuzey Kıbrıs Türk Cumhuriyeti",
+  "Cyprus": "Güney Kıbrıs Rum Yönetimi",
+  "Palestine": "Filistin",
+  "Cyprus U.N. Buffer Zone": null,
+  "Indian Ocean Ter.": null,
+  "Ashmore and Cartier Is.": null,
+  "Siachen Glacier": null
+};
+
+/* Acil durum yedeği: Natural Earth'te bulunamayan mikro ülkeler için
+   eski oyundaki (kaba) geometri. Normalde hiç kullanılmaz. */
+const OLD_MICRO_FALLBACK = {"Andorra":{"type":"Polygon","coordinates":[[[1.4077997,42.486294],[1.5510875,42.4326182],[1.7868662,42.5745126],[1.4787773,42.6514498],[1.4077997,42.486294]]]},"Lihtenştayn":{"type":"Polygon","coordinates":[[[9.5193111,47.0965561],[9.6335324,47.0834247],[9.5307487,47.270581],[9.5193111,47.0965561]]]},"Lüksemburg":{"type":"Polygon","coordinates":[[[5.7356988,49.8969246],[5.9106751,49.6624741],[5.8085478,49.5409107],[5.9819721,49.4510675],[6.3688512,49.4598681],[6.517683,49.7234631],[6.1024498,50.1705495],[5.7356988,49.8969246]]]},"Malta":{"type":"Polygon","coordinates":[[[13.9360446,36.0715762],[14.3160471,35.600521],[14.8096919,35.7858562],[14.7643247,35.9967998],[14.3439654,36.2660417],[14.0603184,36.2483953],[13.9360446,36.0715762]]]},"San Marino":{"type":"Polygon","coordinates":[[[12.4365217,43.9566339],[12.4874043,43.8964693],[12.5150723,43.9895089],[12.4365217,43.9566339]]]},"Vatikan":{"type":"Polygon","coordinates":[[[12.4554001,41.9073829],[12.4545155,41.9002048],[12.4583653,41.9022574],[12.4554001,41.9073829]]]},"Bahreyn":{"type":"Polygon","coordinates":[[[50.2697989,26.0797357],[50.4334095,25.6791807],[50.81,25.535],[50.9233651,26.2672151],[50.7462712,26.6277097],[50.3875768,26.5300127],[50.2697989,26.0797357]]]},"Singapur":{"type":"Polygon","coordinates":[[[103.5655797,1.1956685],[104.1290145,1.2726318],[104.0915225,1.412616],[103.7138107,1.4579441],[103.5655797,1.1956685]]]},"Komorlar":{"type":"Polygon","coordinates":[[[42.8262181,-11.803432],[43.5259961,-12.5639198],[44.4374566,-12.9854371],[44.9730591,-12.1975229],[43.4281462,-11.1721574],[43.1456707,-11.2344261],[42.8262181,-11.803432]]]},"São Tomé ve Príncipe":{"type":"Polygon","coordinates":[[[6.260642,0.2494502],[6.4162281,-0.1861604],[6.7829156,-0.0844596],[7.6195288,1.4392509],[7.6054134,1.8331509],[7.2336441,1.8622492],[6.260642,0.2494502]]]},"Antigua ve Barbuda":{"type":"Polygon","coordinates":[[[-62.5548313,16.8974346],[-62.4475901,16.755628],[-61.5130019,16.9166717],[-61.5211259,17.6370611],[-61.6856322,17.8868107],[-62.041259,17.854682],[-62.5548313,16.8974346]]]},"Barbados":{"type":"Polygon","coordinates":[[[-59.8562115,13.308],[-59.8124156,13.006],[-59.6057424,12.86],[-59.2292067,13.072],[-59.5371083,13.521],[-59.8562115,13.308]]]},"Dominika":{"type":"Polygon","coordinates":[[[-61.4801175,15.5372748],[-61.3741178,15.2141983],[-61.2595336,15.2507792],[-61.3025324,15.584309],[-61.4801175,15.5372748]]]},"Grenada":{"type":"Polygon","coordinates":[[[-62.0072687,12.0013516],[-61.880575,11.8045586],[-61.6196349,11.8117249],[-61.2095018,12.3975559],[-61.663148,12.6097247],[-62.0072687,12.0013516]]]},"Saint Kitts ve Nevis":{"type":"Polygon","coordinates":[[[-63.0491098,17.2767349],[-62.5995412,16.8926305],[-62.3741863,17.28273],[-62.7847057,17.6170552],[-63.0491098,17.2767349]]]},"Saint Lucia":{"type":"Polygon","coordinates":[[[-61.2855618,13.8629618],[-61.1641981,13.599294],[-60.850187,13.5272198],[-60.6852133,13.7676733],[-60.6964271,14.1358207],[-61.0996135,14.2481101],[-61.2855618,13.8629618]]]},"Saint Vincent ve Grenadinler":{"type":"Polygon","coordinates":[[[-61.6645712,12.610332],[-61.2104846,12.3983584],[-61.0980577,12.4990585],[-60.9211871,12.9400664],[-60.9827451,13.5092693],[-61.3695518,13.4878131],[-61.6645712,12.610332]]]},"Trinidad ve Tobago":{"type":"Polygon","coordinates":[[[-62.083056,10.046111],[-61.1918763,9.8732106],[-60.8592411,9.97879],[-60.305234,11.2182275],[-60.3498803,11.4799629],[-60.7188095,11.5208215],[-61.729444,10.9479173],[-62.083056,10.046111]]]},"Nauru":{"type":"Polygon","coordinates":[[[166.7106737,-0.528],[166.9352626,-0.7526654],[167.1600334,-0.5280907],[166.9354445,-0.3033259],[166.7106737,-0.528]]]},"Tuvalu":{"type":"MultiPolygon","coordinates":[[[[176.31,-5.65],[176.34,-5.68],[176.31,-5.71],[176.28,-5.68],[176.31,-5.65]]],[[[176.30,-6.26],[176.33,-6.29],[176.30,-6.32],[176.27,-6.29],[176.30,-6.26]]],[[[177.33,-6.09],[177.36,-6.12],[177.33,-6.15],[177.30,-6.12],[177.33,-6.09]]],[[[177.14,-7.21],[177.17,-7.24],[177.14,-7.27],[177.11,-7.24],[177.14,-7.21]]],[[[178.67,-7.46],[178.70,-7.49],[178.67,-7.52],[178.64,-7.49],[178.67,-7.46]]],[[[178.34,-7.98],[178.37,-8.01],[178.34,-8.04],[178.31,-8.01],[178.34,-7.98]]],[[[179.19,-8.50],[179.22,-8.53],[179.19,-8.56],[179.16,-8.53],[179.19,-8.50]]],[[[179.84,-9.36],[179.87,-9.39],[179.84,-9.42],[179.81,-9.39],[179.84,-9.36]]],[[[179.46,-10.76],[179.49,-10.79],[179.46,-10.82],[179.43,-10.79],[179.46,-10.76]]]]}};
+
+/* KKTC bayrağı (flagcdn'de bulunmadığı için gömülü SVG) */
+const KKTC_FLAG_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 20">' +
+  '<rect width="30" height="20" fill="#fff"/>' +
+  '<rect y="3.1" width="30" height="1.7" fill="#E30A17"/>' +
+  '<rect y="15.2" width="30" height="1.7" fill="#E30A17"/>' +
+  '<circle cx="12.9" cy="10" r="4.3" fill="#E30A17"/>' +
+  '<circle cx="14.05" cy="10" r="3.35" fill="#fff"/>' +
+  '<polygon fill="#E30A17" points="19.90,10.00 18.31,10.52 18.31,12.19 17.33,10.84 15.74,11.35 16.72,10.00 15.74,8.65 17.33,9.16 18.31,7.81 18.31,9.48"/>' +
+  '</svg>';
+const KKTC_FLAG_URL = 'data:image/svg+xml;utf8,' + encodeURIComponent(KKTC_FLAG_SVG);
+
+/* ============================================================================
+   BÖLÜM 0: OYUN AYARLARI
+   ============================================================================ */
+const CONFIG = {
+  /* Sınır verisi: Natural Earth 1:50m (topojson, ~0,8 MB sıkıştırılmış) */
+  topoUrls: [
+    'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-50m.json',
+    'https://unpkg.com/world-atlas@2/countries-50m.json'
+  ],
+  /* Kütüphaneler (birincil + yedek CDN) */
+  libs: [
+    ['https://unpkg.com/globe.gl@2/dist/globe.gl.min.js',
+     'https://cdn.jsdelivr.net/npm/globe.gl@2/dist/globe.gl.min.js'],
+    ['https://unpkg.com/topojson-client@3/dist/topojson-client.min.js',
+     'https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js'],
+    ['https://unpkg.com/topojson-simplify@3/dist/topojson-simplify.min.js',
+     'https://cdn.jsdelivr.net/npm/topojson-simplify@3/dist/topojson-simplify.min.js']
+  ],
+  /* Küre dokuları (NASA Blue Marble + ETOPO kabartma + yıldız arka planı) */
+  textureBases: [
+    'https://unpkg.com/three-globe/example/img/',
+    'https://cdn.jsdelivr.net/npm/three-globe/example/img/'
+  ],
+  /* Sadeleştirme bütçesi: tüm dünya için hedef nokta sayısı.
+     Eski oyunda ~16.000 nokta vardı (Vatikan 4 nokta!); ~46.000 nokta,
+     kıyıları düzgün gösterirken oyunun akıcılığını korur. */
+  targetPoints: 46000,
+  /* Bir ülke sadeleştirme sonrası bu sayının altına düşerse
+     tam çözünürlüklü 50m verisine geri döner (mikro ülke koruması). */
+  minPointsPerCountry: 24,
+  /* Ülke katmanı yüksekliği: yarıçapın binde 1,2'si (~7,6 km). Eskiden 0,006
+     (~38 km) idi ve yandan bakınca kıyılar dev falezler gibi görünüyordu.
+     Daha da alçaltmak, kapak üçgenlerinin küre yüzeyinin altına "batmasına"
+     yol açar; bu yüzden tessellasyon da inceltildi (curvatureResolution). */
+  polygonAltitude: 0.0012,
+  microAltitude: 0.002,     /* mikro ülkeler biraz daha üstte (örtüşme önlenir) */
+  curvatureResolution: 2.5, /* kapak yüzeyi kaç derecelik adımlarla küreyi izler */
+  /* Çevrimiçi düello: PeerJS (WebRTC) — ücretsiz genel sinyal sunucusu üzerinden
+     eşler arası bağlantı kurulur; oyun verisi doğrudan iki oyuncu arasında akar. */
+  peerJsUrls: ['https://unpkg.com/peerjs@1/dist/peerjs.min.js',
+               'https://cdn.jsdelivr.net/npm/peerjs@1/dist/peerjs.min.js'],
+  roomPrefix: 'dunya-ulkeleri-duello-',
+  onlineTurnSeconds: 60,    /* çevrimiçi tur süresi; dolunca otomatik pas */
+  startView: { lat: 39, lng: 35, altitude: 2.2 },  /* açılış: Türkiye merkezli */
+  /* WGS84 elipsoidi: kutup basıklığı 1/298,257223563 */
+  flattening: 1 / 298.257223563
+};
+
+/* ============================================================================
+   BÖLÜM 2: YARDIMCI FONKSİYONLAR
+   ============================================================================ */
+const $ = id => document.getElementById(id);
+const tick = () => new Promise(r => setTimeout(r, 0));
+
+/* Türkçe karakterleri ve aksanları sadeleştirerek karşılaştırma anahtarı üretir.
+   (Eski sürümde "São Tomé" ve "Bosna-Hersek" gibi adlar aksan/tire yüzünden
+   hiç eşleşemiyordu — burada NFD ayrıştırmasıyla düzeltildi.) */
+function normalize(s) {
+  return s.trim().toLowerCase()
+    .replace(/ı/g, 'i')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[-'’´`."]/g, ' ')
+    .replace(/[^a-z0-9 ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function formatPop(n) {
+  if (n >= 1e9) return '≈ ' + (n / 1e9).toLocaleString('tr-TR', { maximumFractionDigits: 2 }) + ' milyar';
+  if (n >= 1e6) return '≈ ' + (n / 1e6).toLocaleString('tr-TR', { maximumFractionDigits: 1 }) + ' milyon';
+  if (n >= 1e3) return '≈ ' + Math.round(n / 1e3).toLocaleString('tr-TR') + ' bin';
+  return '≈ ' + n;
+}
+function formatArea(a) {
+  return (a < 1 ? a.toLocaleString('tr-TR') : Math.round(a).toLocaleString('tr-TR')) + ' km²';
+}
+function formatTime(sec) {
+  return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0');
+}
+function flagUrl(name, w) {
+  const code = FLAG_MAP[name];
+  if (code === 'kktc') return KKTC_FLAG_URL;
+  return 'https://flagcdn.com/w' + (w || 80) + '/' + code + '.png';
+}
+/* Genel amaçlı bildirim (başarım, bonus, pas vb.) */
+function showToast(text, head) {
+  $('toast-head').textContent = head || '';
+  $('toast-name').textContent = text;
+  const toast = $('achievement-toast');
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2400);
+}
+function loadScript(url) {
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = url; s.onload = () => res(true); s.onerror = () => rej(new Error(url));
+    document.head.appendChild(s);
+  });
+}
+async function loadWithFallback(urls) {
+  for (const u of urls) { try { await loadScript(u); return true; } catch (e) {} }
+  return false;
+}
+function imgOk(url) {
+  return new Promise(res => {
+    const im = new Image(); im.crossOrigin = 'anonymous';
+    im.onload = () => res(true); im.onerror = () => res(false);
+    setTimeout(() => res(false), 15000); im.src = url;
+  });
+}
+function countPts(geom) {
+  const polys = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
+  let n = 0;
+  for (const p of polys) for (const r of p) n += r.length;
+  return n;
+}
+/* Ülkenin KAMERA ÇERÇEVESİ kutusu: en büyük parçadan başlar, ona 20°'den
+   yakın parçaları (adalar vb.) kutuya katarak büyütür. Uzak denizaşırı
+   topraklar (ör. Fransız Guyanası) çerçeveye girmez — yoksa kamera tüm
+   gezegene uzaklaşırdı. span = en büyük parçanın açıklığı (mikro bayrağı için). */
+function frameBoxOf(geom) {
+  const polys = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
+  const boxes = polys.map(p => {
+    const ring = p[0];
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    let prevX = null;
+    for (const pt of ring) {
+      /* 180. boylam (antimeridyen) sarmalını aç: ardışık noktalar arası fark
+         180°'yi aşarsa ±360 ekleyip sürekli bir dizi oluşturulur. Aksi halde
+         Fiji gibi bu hattın üzerinde yer alan ülkelerde min/max hesabı
+         "dünyanın tam öbür yarısını" (boylam≈0°) merkez sanar. */
+      let x = pt[0];
+      if (prevX !== null) {
+        while (x - prevX > 180) x -= 360;
+        while (x - prevX < -180) x += 360;
+      }
+      prevX = x;
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (pt[1] < y0) y0 = pt[1]; if (pt[1] > y1) y1 = pt[1];
+    }
+    return { x0, y0, x1, y1, span: Math.max(x1 - x0, y1 - y0) };
+  });
+  boxes.sort((a, b) => b.span - a.span);
+  const span = boxes[0].span;
+  const box = { x0: boxes[0].x0, y0: boxes[0].y0, x1: boxes[0].x1, y1: boxes[0].y1 };
+  const NEAR = 20;
+  const used = new Set([0]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    boxes.forEach((b, i) => {
+      if (used.has(i)) return;
+      const dx = Math.max(0, Math.max(box.x0 - b.x1, b.x0 - box.x1));
+      const dy = Math.max(0, Math.max(box.y0 - b.y1, b.y0 - box.y1));
+      if (dx <= NEAR && dy <= NEAR) {
+        box.x0 = Math.min(box.x0, b.x0); box.x1 = Math.max(box.x1, b.x1);
+        box.y0 = Math.min(box.y0, b.y0); box.y1 = Math.max(box.y1, b.y1);
+        used.add(i);
+        changed = true;
+      }
+    });
+  }
+  return { span, box: [box.x0, box.y0, box.x1, box.y1] };
+}
+
+/* HTML-özel karakterleri kaçışlar (XSS önlemi): çevrimiçi düellodaki rakip
+   takma adı gibi dışarıdan gelen serbest metinler innerHTML'e yazılmadan
+   önce buradan geçer. */
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+/* Ülke zorluk bonusu (COUNTRY_INFO: [başkent, nüfus, dil, yüzölçümü]).
+   Kolay (nüfus>30M VEYA yüzölçümü>500bin km²): bonus yok, sadece taban puan.
+   Zor (nüfus<1M VEYA yüzölçümü<20bin km²): +50. Diğerleri (Normal): +25. */
+function difficultyBonus(name) {
+  const info = COUNTRY_INFO[name];
+  if (!info) return 0;
+  const pop = info[1], area = info[3];
+  if (pop > 30000000 || area > 500000) return 0;
+  if (pop < 1000000 || area < 20000) return 50;
+  return 25;
+}
+
+/* ============================================================================
+   BÖLÜM 3: SINIR VERİSİNİN YÜKLENMESİ VE İYİLEŞTİRİLMESİ
+   ----------------------------------------------------------------------------
+   1) Natural Earth 1:50m topojson indirilir (iki CDN denenir).
+   2) Kayıtlar ISO koduna (yedek: ada) göre oyundaki ülkelere eşlenir.
+   3) Küresel (spherical) Visvalingam ağırlıklarıyla, YALNIZCA oyundaki
+      ülkelerin kullandığı yaylar üzerinden uyarlanabilir eşik seçilir:
+      karmaşık kıyılar detay tutar, sade sınırlar az nokta harcar.
+   4) Aynı ülkeye eşlenen parçalar (Fas+Batı Sahra, Somali+Somaliland)
+      topojson.merge ile İÇ SINIRLARI SİLİNEREK birleştirilir.
+   5) Sadeleştirme bir ülkeyi fazla budarsa (mikro ülkeler) o ülke tam
+      çözünürlüklü veriden geri yüklenir → "bozunuma uğramış" sınır kalmaz,
+      gerek duymayan ülkeye de fazladan nokta harcanmaz.
+   6) Kıbrıs + KKTC de aynı Natural Earth verisinden gelir; Yeşil Hat iki
+      ülkenin ortak yayı olduğundan kusursuz hizalıdır. (Kullanıcının OSM
+      dosyaları karasularını da kapladığı için kullanılamadı.)
+   7) Küresel sarım güvencesi: her halkanın küresel alanı ölçülür; içi
+      yarım küreden büyük çıkan (ters sarımlı) halkalar çevrilir. Hiçbir
+      ülke sınırı denizlere/okyanuslara taşamaz — mutlak değişmez.
+   ============================================================================ */
+const ALL_NAMES = CONTINENTS_ORDER.flatMap(c => CONTINENTS[c]);
+const CONT_OF = {};
+CONTINENTS_ORDER.forEach(c => CONTINENTS[c].forEach(n => { CONT_OF[n] = c; }));
+
+/* ============================================================================
+   BÖLÜM 2B: CEVAP EŞLEŞTİRME MOTORU (esnek yazım kabulü)
+   ----------------------------------------------------------------------------
+   Her ülke için kabul edilebilir yazımlar kümesi kurulur:
+   • Ülkenin adı + " ve "siz biçimi ("Trinidad Tobago")
+   • " Cumhuriyeti" eki atılmış biçimi ("Dominik")
+   • Tüm takma adlar ("abd", "kdc", "ingiltere"…)
+   • Yerel adlar ("Deutschland", "United States of America"…)
+   Birebir eşleşme yoksa Levenshtein mesafesiyle küçük yazım hataları
+   tolere edilir ("ameriks" → amerika). GÜVENLİK KURALI: yazılan şey BAŞKA
+   bir ülkenin birebir adıysa asla kabul edilmez — "İran" yazan, İrak'ı
+   bilmiş sayılMAZ; "Avusturya" yazan Avustralya'yı bilmiş sayılMAZ.
+   ============================================================================ */
+const CANDIDATES = {};    /* ülke → Set(kabul edilebilir normalize yazımlar) */
+const EXACT_OWNER = {};   /* normalize yazım → sahibi olan ülke */
+(function buildCandidates() {
+  function add(name, s) {
+    const n = normalize(s);
+    if (n.length < 2) return;
+    CANDIDATES[name].add(n);
+    if (!(n in EXACT_OWNER)) EXACT_OWNER[n] = name;
+  }
+  for (const name of ALL_NAMES) {
+    CANDIDATES[name] = new Set();
+    add(name, name);
+    if (/ ve /i.test(name)) add(name, name.replace(/ ve /gi, ' '));
+    if (/ cumhuriyeti$/i.test(name)) add(name, name.replace(/ cumhuriyeti$/i, ''));
+    const nat = NATIVE_NAME[name];
+    if (nat) nat.split('·').forEach(p => add(name, p));
+  }
+  for (const [alias, target] of Object.entries(ALIASES)) {
+    if (CANDIDATES[target]) add(target, alias);
+  }
+})();
+
+/* Sınırlı Levenshtein mesafesi (max aşılırsa max+1 döner — erken çıkış) */
+function levDist(a, b, max) {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  const n = b.length;
+  let prev = [], cur = [];
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    cur[0] = i;
+    let rowMin = i;
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > max) return max + 1;
+    const t = prev; prev = cur; cur = t;
+  }
+  return prev[n];
+}
+
+async function loadBorders(setLoad) {
+  /* --- indirme --- */
+  let text = null;
+  for (const u of CONFIG.topoUrls) {
+    try { const r = await fetch(u); if (r.ok) { text = await r.text(); break; } } catch (e) {}
+  }
+  if (!text) throw new Error('Sınır verisi indirilemedi. İnternet bağlantınızı kontrol edin.');
+  setLoad(35, 'Sınırlar iyileştiriliyor…'); await tick();
+
+  const topoFull = JSON.parse(text);           /* dokunulmamış kopya (detay geri yükleme) */
+  const objName = Object.keys(topoFull.objects)[0];
+
+  /* --- eşleme --- */
+  function gameNameOf(g) {
+    const idNum = parseInt(g.id, 10);
+    if (Number.isFinite(idNum) && idNum >= 0 && NE_ID_TO_GAME[idNum]) return NE_ID_TO_GAME[idNum];
+    const nm = g.properties && g.properties.name;
+    if (nm && Object.prototype.hasOwnProperty.call(NE_NAME_FIX, nm)) return NE_NAME_FIX[nm];
+    return null;
+  }
+  function groupByGame(topology) {
+    const m = new Map();
+    for (const g of topology.objects[objName].geometries) {
+      const n = gameNameOf(g);
+      if (!n) continue;
+      if (!m.has(n)) m.set(n, []);
+      m.get(n).push(g);
+    }
+    return m;
+  }
+  const groupsFull = groupByGame(topoFull);
+
+  /* --- uyarlanabilir sadeleştirme --- */
+  const pre = topojson.presimplify(JSON.parse(text), topojson.sphericalTriangleArea);
+  const usedArcs = new Set();
+  (function collect() {
+    for (const g of pre.objects[objName].geometries) {
+      if (!gameNameOf(g)) continue;
+      (function walk(a) {
+        for (const x of a) Array.isArray(x) ? walk(x) : usedArcs.add(x < 0 ? ~x : x);
+      })(g.arcs || []);
+    }
+  })();
+  const weights = [];
+  usedArcs.forEach(i => { for (const p of pre.arcs[i]) if (isFinite(p[2])) weights.push(p[2]); });
+  weights.sort((a, b) => b - a);
+  const threshold = weights.length > CONFIG.targetPoints ? weights[CONFIG.targetPoints] : 0;
+  const simp = topojson.simplify(pre, threshold);
+  const groupsSimp = groupByGame(simp);
+  setLoad(50, 'Ülkeler birleştiriliyor…'); await tick();
+
+  /* --- özellik üretimi --- */
+  function extract(topology, group) {
+    return group.length > 1
+      ? topojson.merge(topology, group)
+      : topojson.feature(topology, group[0]).geometry;
+  }
+  const features = [];
+  const missing = [];
+  let restored = 0;
+  for (const name of ALL_NAMES) {
+    const gs = groupsSimp.get(name);
+    if (!gs || !gs.length) {
+      if (OLD_MICRO_FALLBACK[name]) {
+        features.push(mkFeature(name, OLD_MICRO_FALLBACK[name]));
+        missing.push(name + ' (eski veriyle)');
+      } else missing.push(name);
+      continue;
+    }
+    let geometry = extract(simp, gs);
+    if (countPts(geometry) < CONFIG.minPointsPerCountry) {
+      geometry = extract(topoFull, groupsFull.get(name));   /* tam detaya dön */
+      restored++;
+      /* Tam detayda bile nokta sayısı yetersizse (ör. Tuvalu gibi ufak, dağınık
+         adalardan oluşan ülkeler 1:50m ölçekte neredeyse kayboluyor) ve elde
+         acil durum yedeği varsa sınır bu şekilde tamamen düzeltilir. */
+      if (countPts(geometry) < CONFIG.minPointsPerCountry && OLD_MICRO_FALLBACK[name]) {
+        geometry = OLD_MICRO_FALLBACK[name];
+        missing.push(name + ' (eski veriyle — tam detay da yetersizdi)');
+      }
+    }
+    features.push(mkFeature(name, geometry));
+  }
+  function mkFeature(name, geometry) {
+    const fb = frameBoxOf(geometry);
+    return {
+      type: 'Feature',
+      properties: { name, continent: CONT_OF[name], micro: fb.span < 1.2, span: fb.span, box: fb.box },
+      geometry
+    };
+  }
+
+  /* --- KÜRESEL sarım (winding) güvencesi ---
+     Küresel yorumda bir halkanın "içi", sarım yönüne göre kürenin iki
+     yüzünden biridir: ters sarılmış bir halka, ülke yerine "dünyanın geri
+     kalanını" (tüm okyanusları!) tanımlar. Burada her halkanın küresel
+     işaretli alanı (Chamberlain–Duquette, d3.geoArea eşleniği) ölçülür ve
+     şu KURAL zorlanır:
+       • dış halkanın içi YARIM KÜREDEN BÜYÜK OLAMAZ → değilse çevrilir,
+       • delikler dışın tersine sarılır.
+     Böylece hiçbir ülkenin sınırı denizlere/okyanuslara taşamaz; bu bir
+     referans karşılaştırması değil, mutlak bir değişmezdir. (Düzlemsel
+     işaret karşılaştırması Rusya gibi 190° boylam kaplayan halkalarda
+     yanılabildiği için kullanılmaz.) */
+  const RAD = Math.PI / 180, SPHERE_SR = 4 * Math.PI, HEMI_SR = 2 * Math.PI;
+  function ringAreaSr(ring) {              /* steradyan, [0, 4π) aralığına oturtulur */
+    let s = 0;
+    for (let i = 0; i < ring.length - 1; i++) {
+      const l1 = ring[i][0] * RAD, f1 = ring[i][1] * RAD;
+      const l2 = ring[i + 1][0] * RAD, f2 = ring[i + 1][1] * RAD;
+      let dl = l2 - l1;                    /* antimeridyen sıçramasına dayanıklı */
+      if (dl > Math.PI) dl -= 2 * Math.PI; else if (dl < -Math.PI) dl += 2 * Math.PI;
+      s += dl * (2 + Math.sin(f1) + Math.sin(f2));
+    }
+    s /= 2;
+    s %= SPHERE_SR;
+    return s < 0 ? s + SPHERE_SR : s;
+  }
+  let rewound = 0;
+  for (const f of features) {
+    const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+    for (const poly of polys) poly.forEach((ring, ri) => {
+      const biggerThanHemi = ringAreaSr(ring) > HEMI_SR;
+      if (ri === 0 ? biggerThanHemi : !biggerThanHemi) { ring.reverse(); rewound++; }
+    });
+  }
+  if (rewound) console.info('[Dünya Ülkeleri] Ters sarımlı halka düzeltildi: ' + rewound);
+
+  /* Geliştirici özeti (oyunu etkilemez) */
+  const total = features.reduce((s, f) => s + countPts(f.geometry), 0);
+  console.info('[Dünya Ülkeleri] ' + features.length + ' ülke yüklendi · ' +
+    total.toLocaleString('tr-TR') + ' sınır noktası · tam detaya dönen mikro ülke: ' + restored);
+  if (missing.length) console.warn('[Dünya Ülkeleri] Natural Earth eşleşmesi bulunamayan:', missing);
+
+  /* Ortalama (mikro olmayan) ülke açısal boyutu: mikro ülkeye zoom-in
+     yapıldıktan sonra "normal bir ülke" ölçeğine zoom-out hedefi olarak
+     kullanılır (ör. Vatikan → İtalya'yı da görecek uzaklık). */
+  const spans = features.filter(f => !f.properties.micro).map(f => f.properties.span);
+  AVG_COUNTRY_SPAN = spans.length ? spans.reduce((a, b) => a + b, 0) / spans.length : 14;
+
+  return { type: 'FeatureCollection', features };
+}
+
+/* ============================================================================
+   BÖLÜM 4: 3B KÜRENİN KURULMASI
+   ----------------------------------------------------------------------------
+   Gerçekçilik katmanları:
+   • NASA Blue Marble uydu dokusu (gerçek renkler)
+   • ETOPO tabanlı kabartma dokusu → dağlar/çukurlar ışıkla belirir (yükselti)
+   • WGS84 elipsoit basıklığı: küre Y ekseninde 1/298,257 oranında basılır
+     (jeoit sapmaları ±100 m olduğundan bu ölçekte görünmez; bilimsel olarak
+     doğru olan elipsoit modeli uygulanır)
+   • Atmosfer saçılması ve yıldızlı gökyüzü
+   ============================================================================ */
+let world = null;
+let V3 = null;                 /* three.js Vector3 sınıfı (küreden ödünç alınır) */
+let YSCALE = 1 - CONFIG.flattening;
+let AVG_COUNTRY_SPAN = 14;     /* ortalama ülke açısal boyutu (derece) — loadBorders() doldurur */
+let microZoomTimer = null;     /* mikro ülke iki aşamalı zoom-out zamanlayıcısı */
+
+const state = {
+  mode: null,                  /* 'free' | 'solo' | 'duel' */
+  mp: null,                    /* düello durumu (BÖLÜM 6B) — serbest modda null */
+  revealed: new Set(),         /* düelloda cevabı açıklanan ülkeler */
+  guessed: new Set(),
+  wrongCount: 0,
+  hintCount: 0,
+  streak: 0,                   /* üst üste doğru sayısı (başarımlar için) */
+  activeCountry: null,         /* şu an tahmin edilen ülke */
+  hoverName: null,
+  highlightedCountry: null,
+  showingRemaining: false,
+  hintFlow: new Map(),         /* ülke → { idx, revealed } kademeli ipucu akışı */
+  startTime: null,
+  pausedTotal: 0,              /* duraklatmada geçen toplam süre (ms) */
+  pausedAt: null,
+  ended: false,
+  /* Serbest Keşif modu kendi puanını tutar (mp nesnesi yalnızca Solo/Düello'da kurulur) */
+  freeScore: 0,
+  freeCleanStreak: 0,          /* serbest modda "temiz" (yanlışsız + ipucusuz) art arda doğru sayısı */
+  freeTurnWrong: false,        /* şu an seçili ülkede yanlış denendi mi */
+  freeTurnHint: false,         /* şu an seçili ülkede ipucu kullanıldı mı */
+  scoreHistory: []             /* bilinen ülke + kazanılan puan geçmişi (yeniden eskiye) */
+};
+let WORLD = null;
+const FEATURE_OF = {};
+
+async function buildGlobe(setLoad) {
+  /* Doku CDN'i seç (ulaşılamazsa yedeğe geç) */
+  let base = CONFIG.textureBases[0];
+  for (const b of CONFIG.textureBases) {
+    if (await imgOk(b + 'earth-topology.png')) { base = b; break; }
+  }
+  setLoad(72, 'Küre dokuları yükleniyor…'); await tick();
+
+  world = Globe({ rendererConfig: { antialias: true, alpha: false } })($('globe'))
+    .width(window.innerWidth).height(window.innerHeight)
+    .globeImageUrl(base + 'earth-blue-marble.jpg')
+    .bumpImageUrl(base + 'earth-topology.png')
+    .backgroundImageUrl(base + 'night-sky.png')
+    .showAtmosphere(true)
+    .atmosphereColor('#7dd3fc')
+    .atmosphereAltitude(0.15)
+    .polygonsData(WORLD.features)
+    .polygonGeoJsonGeometry(d => d.geometry)
+    .polygonAltitude(d => d.properties.micro ? CONFIG.microAltitude : CONFIG.polygonAltitude)
+    .polygonCapColor(d => capColor(d))
+    .polygonSideColor(() => 'rgba(0, 0, 0, 0)')   /* yan duvarlar görünmez: komşu duvarların z-çakışması önlenir */
+    .polygonStrokeColor(d => strokeColor(d))
+    .polygonsTransitionDuration(0)
+    .polygonLabel(() => '')
+    .onPolygonHover(onPolygonHover)
+    .onPolygonClick(onPolygonClick)
+    .onGlobeClick(closeAllPanels)
+    .pointOfView(CONFIG.startView, 0);
+
+  V3 = world.camera().position.constructor;
+
+  /* Kapak tessellasyon inceliği (falez düzeltmesinin tamamlayıcısı):
+     yöntem adı globe.gl sürümüne göre değişir; hangisi varsa o kullanılır,
+     hiçbiri yoksa sessizce atlanır — oyun bundan bağımsız çalışır.
+     (Katman yüksekliği 0,0012; varsayılan 5° tessellasyonda bile kapaklar
+     küre yüzeyinin üzerinde kalır, bu ayar yalnızca yüzeyi pürüzsüzleştirir.) */
+  try {
+    if (typeof world.polygonCapCurvatureResolution === 'function')
+      world.polygonCapCurvatureResolution(CONFIG.curvatureResolution);
+    else if (typeof world.polygonCurvatureResolution === 'function')
+      world.polygonCurvatureResolution(CONFIG.curvatureResolution);
+  } catch (e) {}
+
+  /* --- WGS84 basıklığı: küre grubunu Y ekseninde ölçekle --- */
+  try {
+    const grp = world.scene().children.find(o => o.type === 'Group');
+    if (grp) grp.scale.y = YSCALE;
+  } catch (e) { console.warn('Elipsoit ölçeği uygulanamadı:', e); }
+
+  /* --- Işık: yönlü ışığı kameraya bağla → kürenin karanlık yüzü kalmaz --- */
+  try {
+    const scene = world.scene(), cam = world.camera();
+    const dir = scene.children.find(o => o.isDirectionalLight);
+    if (dir) { scene.add(cam); cam.add(dir); dir.position.set(30, 45, 70); }
+  } catch (e) {}
+
+  /* --- Pürüzsüz yakınlaşma/uzaklaşma --- */
+  const ctr = world.controls();
+  ctr.enableDamping = true;
+  ctr.dampingFactor = 0.08;
+  ctr.zoomSpeed = 0.7;
+  ctr.minDistance = 101.8;      /* ~115 km irtifa: mikro ülkeler seçilebilir */
+  ctr.maxDistance = 480;
+  ctr.autoRotate = true;        /* başlangıç ekranında yavaşça döner */
+  ctr.autoRotateSpeed = 0.35;
+  ctr.addEventListener('change', onCameraChange);
+  onCameraChange();
+  fixPolygonMaterials();                       /* saydam kapak düzeltmesi (ilk kurulum) */
+  setTimeout(fixPolygonMaterials, 1500);       /* geç oluşturulan kapaklar için güvence */
+}
+
+/* Kamera değişince: işaretçi konumları + dönüş hızı + yakınlık etiketi */
+function onCameraChange() {
+  markersDirty = true;
+  if (!world) return;
+  const d = world.camera().position.length();
+  const ctr = world.controls();
+  ctr.rotateSpeed = Math.min(1, Math.max(0.04, (d - 100) / 120));
+  const alt = d / 100 - 1;
+  $('zoom-level-label').textContent =
+    alt > 1.6 ? 'Genel' : alt > 0.7 ? 'Orta' : alt > 0.25 ? 'Yakın' : 'Çok Yakın';
+}
+
+/* --- Renk düzeni: uydu dokusu yarı saydam katmanların altından görünür --- */
+function capColor(d) {
+  const name = d.properties.name;
+  if (name === state.highlightedCountry) return 'rgba(239, 68, 68, 0.85)';
+  if (name === state.activeCountry) return 'rgba(245, 158, 11, 0.80)';
+  if (state.guessed.has(name))
+    return name === state.hoverName ? 'rgba(34, 197, 94, 0.65)' : 'rgba(34, 197, 94, 0.45)';
+  if (state.revealed.has(name))    /* düelloda pas geçilen: gri */
+    return name === state.hoverName ? 'rgba(148, 163, 184, 0.55)' : 'rgba(148, 163, 184, 0.40)';
+  return name === state.hoverName ? 'rgba(56, 189, 248, 0.55)' : 'rgba(23, 49, 88, 0.60)';
+}
+function strokeColor(d) {
+  const name = d.properties.name;
+  if (name === state.highlightedCountry) return '#fca5a5';
+  if (name === state.activeCountry) return '#fde68a';
+  if (state.guessed.has(name)) return '#86efac';
+  if (state.revealed.has(name)) return '#cbd5e1';
+  return '#0b1220';
+}
+function repaint() {
+  if (!world) return;
+  world.polygonCapColor(d => capColor(d)).polygonStrokeColor(d => strokeColor(d));
+  fixPolygonMaterials();
+}
+
+/* --- Üçgen desenli titreme (flicker) düzeltmesi ---
+   Yarı saydam ülke kapaklarında depthWrite açık kalırsa, kürenin eğimini
+   izleyen kapak üçgenleri birbirinin derinlik tamponuna yazar ve çizim
+   sırasına göre üçgen üçgen parlayıp söner. Çözüm: saydam kapaklarda
+   depthWrite kapatılır ve yalnızca ÖN yüzler çizilir (side=FrontSide) —
+   böylece her kapak tek katman, tekdüze bir renk olarak karışır. */
+function fixPolygonMaterials() {
+  if (!world) return;
+  try {
+    world.scene().traverse(o => {
+      if (o.isMesh && o.geometry && /ConicPolygon/i.test(o.geometry.type || '')) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          if (m && m.transparent !== false) { m.depthWrite = false; m.side = 0; /* THREE.FrontSide */ }
+        }
+      }
+    });
+  } catch (e) {}
+}
+
+/* Enlem/boylamı 3B konuma çevirir (elipsoit ölçeği dahil) */
+function llToVec(lat, lng, alt) {
+  let p;
+  if (world.getCoords) p = world.getCoords(lat, lng, alt);
+  else {
+    const phi = (90 - lat) * Math.PI / 180, theta = (90 - lng) * Math.PI / 180, r = 100 * (1 + alt);
+    p = { x: r * Math.sin(phi) * Math.cos(theta), y: r * Math.cos(phi), z: r * Math.sin(phi) * Math.sin(theta) };
+  }
+  return new V3(p.x, p.y * YSCALE, p.z);
+}
+
+/* Ülkeye uçuş: TÜM sınırları ekranda rahatça görünecek uzaklıktan çerçevele.
+   Kamera irtifası, ülkenin açısal boyutundan ve ekranın gerçek görüş
+   açısından (dikey + yatay FOV) hesaplanır; alta/üste pay bırakılır.
+   Mikro ülkelerde (Vatikan, Monako, San Marino…) İKİ AŞAMALI kamera hareketi
+   uygulanır: önce ülke sınırlarının net görüldüğü sıkı bir kadraja girilir,
+   kısa bir bekleyişin ardından çevresindeki normal büyüklükteki ülkeleri de
+   (ör. Vatikan → İtalya) kapsayacak ortalama bir irtifaya geri çekilinir. */
+function flyTo(name, ms) {
+  if (!world) return;
+  const f = FEATURE_OF[name];
+  const c = CENTROIDS[name];
+  let lat, lng, tightAlt;
+  if (f && f.properties.box) {
+    const b = f.properties.box;            /* [x0, y0, x1, y1] — antimeridyen etrafında "sarmalanmamış" olabilir */
+    lat = (b[1] + b[3]) / 2;
+    lng = (b[0] + b[2]) / 2;
+    lng = ((lng + 540) % 360) - 180;        /* -180..180 aralığına normalize et (Fiji vb.) */
+    /* boylam genişliği yer ölçüsünde enlemle daralır */
+    const wDeg = (b[2] - b[0]) * Math.max(0.25, Math.cos(lat * Math.PI / 180));
+    const hDeg = (b[3] - b[1]);
+    tightAlt = frameAltitude(wDeg, hDeg);
+  } else if (c) {
+    lat = c[1]; lng = c[0]; tightAlt = 0.5;
+  } else return;
+
+  clearTimeout(microZoomTimer);
+  const baseMs = ms || 900;
+  if (f && f.properties.micro) {
+    const wideAlt = frameAltitude(AVG_COUNTRY_SPAN, AVG_COUNTRY_SPAN);
+    const inMs = Math.max(500, Math.round(baseMs * 0.6));
+    const holdMs = 650;
+    world.pointOfView({ lat, lng, altitude: tightAlt }, inMs);
+    microZoomTimer = setTimeout(() => {
+      world.pointOfView({ lat, lng, altitude: wideAlt }, Math.max(700, baseMs));
+    }, inMs + holdMs);
+  } else {
+    world.pointOfView({ lat, lng, altitude: tightAlt }, baseMs);
+  }
+}
+/* Verilen açısal genişlik/yüksekliği (derece) ekrana sığdıran kamera irtifası.
+   Küre yarıçapı R=1 kabulüyle: d = cosθ + sinθ / tan(görüşYarımAçısı·doluluk) */
+function frameAltitude(wDeg, hDeg) {
+  const cam = world.camera();
+  const fovV = (cam.fov || 50) * Math.PI / 180;
+  const aspect = cam.aspect || (window.innerWidth / Math.max(1, window.innerHeight));
+  const fovH = 2 * Math.atan(Math.tan(fovV / 2) * aspect);
+  const need = (spanDeg, fovRad, fill) => {
+    const theta = Math.min(80, spanDeg / 2 * 1.1 + 0.3) * Math.PI / 180;   /* kenar payı */
+    const half = Math.max(0.05, (fovRad / 2) * fill);
+    return Math.cos(theta) + Math.sin(theta) / Math.tan(half) - 1;
+  };
+  /* dikeyde %55, yatayda %65 doluluk (başlık + tahmin paneli payı),
+     üzerine %15 "geriden bak" payı; taban irtifa 0.18 (~1.150 km) */
+  const alt = Math.max(need(hDeg, fovV, 0.55), need(wDeg, fovH, 0.65)) * 1.15;
+  return Math.min(2.5, Math.max(0.18, alt));
+}
+
+/* ============================================================================
+   BÖLÜM 5: EKRAN-SABİT "KALANLAR" İŞARETÇİLERİ
+   ----------------------------------------------------------------------------
+   Eski sürümde noktalar SVG içinde olduğundan yakınlaşınca DEVASA büyüyor,
+   ülkenin üzerini kapatıyordu. Burada işaretçiler DOM ögesidir: boyutları
+   CSS pikseliyle SABİTTİR, her karede yalnızca KONUMLARI yeniden izdüşülür.
+   Kürenin arka yüzünde kalanlar ufuk testi ile gizlenir.
+   ============================================================================ */
+const markerEls = new Map();
+let markersDirty = true;
+
+function buildMarkers() {
+  const layer = $('markers-layer');
+  for (const name of ALL_NAMES) {
+    const el = document.createElement('button');
+    el.className = 'remain-marker';
+    el.textContent = '?';
+    el.title = 'Bilinmeyen ülke — tıkla ve tahmin et';
+    el.style.display = 'none';
+    el.addEventListener('click', e => { e.stopPropagation(); selectCountry(name); });
+    layer.appendChild(el);
+    markerEls.set(name, el);
+  }
+}
+
+function markersTick() {
+  if (world && markersDirty) updateMarkerPositions();
+  requestAnimationFrame(markersTick);
+}
+
+function updateMarkerPositions() {
+  markersDirty = false;
+  const cam = world.camera().position;
+  const camLen = cam.length();
+  const cosHorizon = 100 / camLen;
+  const cx = cam.x / camLen, cy = cam.y / camLen, cz = cam.z / camLen;
+  const W = window.innerWidth, H = window.innerHeight;
+  for (const [name, el] of markerEls) {
+    if (!state.showingRemaining || state.guessed.has(name) || state.revealed.has(name) || state.ended) {
+      el.style.display = 'none'; continue;
+    }
+    const c = CENTROIDS[name];
+    if (!c) { el.style.display = 'none'; continue; }
+    const v = llToVec(c[1], c[0], 0.012);
+    const vl = Math.hypot(v.x, v.y, v.z);
+    const facing = (v.x * cx + v.y * cy + v.z * cz) / vl;
+    if (facing < cosHorizon - 0.03) { el.style.display = 'none'; continue; }
+    v.project(world.camera());
+    if (v.z > 1) { el.style.display = 'none'; continue; }
+    el.style.display = 'block';
+    el.style.left = ((v.x + 1) / 2 * W) + 'px';
+    el.style.top = ((1 - v.y) / 2 * H) + 'px';
+  }
+}
+
+$('show-remaining-btn').addEventListener('click', () => {
+  state.showingRemaining = !state.showingRemaining;
+  const btn = $('show-remaining-btn');
+  btn.classList.toggle('active', state.showingRemaining);
+  btn.innerHTML = state.showingRemaining
+    ? '<span class="dot-icon"></span> Kalanları gizle'
+    : '<span class="dot-icon"></span> Kalanları göster';
+  markersDirty = true;
+});
+
+/* ============================================================================
+   BÖLÜM 6: OYUN AKIŞI — seçim, tahmin, ipucu, sürpriz yumurta
+   ============================================================================ */
+function onPolygonHover(d) {
+  state.hoverName = d ? d.properties.name : null;
+  $('globe').style.cursor = d ? 'pointer' : 'grab';
+  repaint();
+  updateTooltip(d);
+}
+
+function onPolygonClick(d, ev) {
+  const name = d.properties.name;
+  if (state.guessed.has(name) || state.revealed.has(name)) { showInfoCard(name, false); return; }
+  selectCountry(name);
+}
+
+/* forDuel=true yalnızca düello motorundan gelir; düelloda elle ülke seçilemez */
+function selectCountry(name, forDuel) {
+  if (state.mp && !forDuel) return;
+  if (state.guessed.has(name) || state.revealed.has(name) || state.ended) return;
+  clearHighlight();
+  /* Künye 5 sn'lik kendi kendine kapanma sürecindeyse (2 kişilik düello),
+     sıradaki ülkeye geçiş onu erkenden kapatmaz — akış hızı bundan etkilenmez. */
+  if (!infoCardAutoManaged) hideInfoCard();
+  state.activeCountry = name;
+  if (!state.mp) { state.freeTurnWrong = false; state.freeTurnHint = false; }   /* yeni deneme: temiz seri sıfırdan */
+  repaint();
+  const input = $('guess-input');
+  input.value = ''; input.className = '';
+  $('guess-feedback').textContent = ''; $('guess-feedback').className = '';
+  /* Cevabı Göster: Tek Kişilik Düello ve Serbest Keşif'te her zaman görünür; düelloda yok */
+  $('show-answer-btn').style.display = (state.mode === 'solo' || state.mode === 'free') ? 'inline-block' : 'none';
+  $('guess-country-hint').textContent = 'Bu ülkeyi biliyor musun?';
+  $('skip-btn').textContent = state.mp
+    ? (state.mp.solo ? 'Pas (sonraya)' : 'Pas (−' + DUEL.PASS + ')')
+    : 'Vazgeç';
+  $('mp-legend').style.display = state.mp ? 'block' : 'none';
+  $('guess-panel').classList.add('visible');
+  input.focus();
+}
+
+/* Düelloda panel oyuncunun sırasıdır: yalnızca oyun motoru (force) kapatabilir */
+function closeGuessPanel(force) {
+  if (state.mp && state.activeCountry && !state.ended && !force) return;
+  state.activeCountry = null;
+  $('guess-panel').classList.remove('visible');
+  repaint();
+}
+function closeAllPanels() {
+  closeGuessPanel();
+  clearHighlight();
+  hideInfoCard();
+  hideScoreHistory();
+}
+
+function clearHighlight() {
+  if (!state.highlightedCountry) return;
+  const li = $('country-list').querySelector('[data-name="' + CSS.escape(state.highlightedCountry) + '"]');
+  if (li) li.classList.remove('list-highlighted');
+  state.highlightedCountry = null;
+  repaint();
+}
+function highlightCountry(name) {
+  clearHighlight();
+  state.highlightedCountry = name;
+  const li = $('country-list').querySelector('[data-name="' + CSS.escape(name) + '"]');
+  if (li) li.classList.add('list-highlighted');
+  repaint();
+  setTimeout(() => { if (state.highlightedCountry === name) clearHighlight(); }, 3000);
+}
+
+function resolveGuess(raw) {
+  const n = normalize(raw);
+  if (!n || !state.activeCountry) return null;
+  const target = state.activeCountry;
+  const cands = CANDIDATES[target];
+  if (!cands) return null;
+  if (cands.has(n)) return target;                              /* birebir kabul */
+  if (EXACT_OWNER[n] && EXACT_OWNER[n] !== target) return null; /* başka ülkenin adı → red */
+  for (const c of cands) {                                      /* yazım hatası toleransı */
+    const tol = c.length >= 8 ? 2 : (c.length >= 5 ? 1 : 0);
+    if (tol && levDist(n, c, tol) <= tol) return target;
+  }
+  return null;
+}
+
+function checkGuess() {
+  if (state.mp && state.mp.online && !isMyTurn()) return;   /* çevrimiçi: sıra rakipte */
+  const raw = $('guess-input').value;
+  if (!raw.trim() || !state.activeCountry || state.ended) return;
+
+  /* Sürpriz yumurta: Türkiye seçiliyken yapımcıların adı yazılırsa… (düelloda kapalı) */
+  const secretName = raw.trim().toLowerCase();
+  if (!state.mp && state.activeCountry === 'Türkiye' && (secretName === 'melihmavi' || secretName === 'erenyıldırım')) {
+    ALL_NAMES.forEach(n => { if (!state.guessed.has(n)) { state.guessed.add(n); markListItem(n); } });
+    afterCorrect(null);
+    return;
+  }
+
+  if (resolveGuess(raw)) {
+    const name = state.activeCountry;
+    state.guessed.add(name);
+    state.streak++;
+    markListItem(name);
+    $('guess-input').className = 'correct';
+    const fb = $('guess-feedback');
+    if (state.mp) {
+      netSend({ t: 'correct' });
+      fb.textContent = '✓ Doğru! ' + duelApplyCorrect();
+    } else {
+      fb.textContent = '✓ Doğru! ' + freeApplyCorrect(name);
+    }
+    fb.className = 'ok';
+    setTimeout(() => afterCorrect(name), 850);
+  } else {
+    state.wrongCount++;
+    state.streak = 0;
+    $('wrong-num').textContent = state.wrongCount;
+    const input = $('guess-input');
+    input.className = 'wrong';
+    const fb = $('guess-feedback');
+    if (state.mp) {
+      netSend({ t: 'wrong' });
+      duelApplyWrong();
+    } else {
+      state.freeTurnWrong = true;
+      state.freeCleanStreak = 0;
+      state.freeScore -= DUEL.WRONG;
+      updateFreeScoreUI();
+    }
+    fb.textContent = 'Yanlış! −' + DUEL.WRONG + ' puan, tekrar dene.'; fb.className = '';
+    setTimeout(() => { input.className = ''; }, 400);
+  }
+}
+
+/* Doğru tahmin sonrası ortak işler (name=null → sürpriz yumurta/tümü) */
+function afterCorrect(name) {
+  closeGuessPanel(true);
+  $('prog-count').textContent = state.guessed.size;
+  updateProgressUI();
+  checkAchievements();
+  markersDirty = true;
+  repaint();
+  if (name) showInfoCard(name, true);
+  if (state.mp) {
+    if (state.ended) return;
+    state.mp.handoff = false;
+    if (state.mp.solo) {
+      if (state.guessed.size === ALL_NAMES.length) { endSolo(true); return; }
+      setTimeout(nextMpTurn, 800);
+    } else {
+      state.mp.turn ^= 1;
+      /* 2 kişilik düello: künye hem oyuncunun hem rakibin ekranında 5 sn
+         durup solarak kapanır — ama oyunun akış hızı ETKİLENMEZ, sıradaki
+         ülke her zamanki gibi 800ms sonra gelir; künye o sırada ekranda
+         kalmaya devam eder (bkz. infoCardAutoManaged / selectCountry). */
+      if (name) {
+        infoCardAutoManaged = true;
+        setTimeout(fadeOutInfoCard, 5000);
+      }
+      setTimeout(nextMpTurn, 800);
+    }
+    return;
+  }
+  if (state.guessed.size === ALL_NAMES.length) showWin();
+}
+
+/* --- İPUCU SİSTEMİ ---
+   İki kademeli, sabit sıralı bir sistemdir (rastgele sıralama yoktur):
+     1) −30 İlk ipucu: harf sayısı + tamamen alt tirelerden oluşan şablon
+        (_ _ _ _ _), başkent ve bayrak HEPSİ BİRDEN açılır.
+     2+) −10 Her basışta kelimedeki gizli harflerden biri rastgele açılır,
+         tüm harfler açılana kadar devam edebilir. */
+/* Unicode harf sınıfı: yalnızca Türkçe değil, "São Tomé" gibi diğer Latin
+   aksanlı harfleri de kapsar — yoksa şablon dışı harfler ipucunda sızardı. */
+function isLetterChar(ch) { return /\p{L}/u.test(ch); }
+function countLetters(name) { return name.split('').filter(isLetterChar).length; }
+/* Harf şablonu: açılmamış harfler "_", açılanlar büyük harf; boşluk/tire
+   olduğu gibi kalır, okunabilirlik için her birim arasına boşluk konur. */
+function letterTemplate(name, revealedSet) {
+  return name.split('').map((ch, i) =>
+    isLetterChar(ch) ? (revealedSet.has(i) ? ch.toLocaleUpperCase('tr-TR') : '_') : ch
+  ).join(' ');
+}
+function hintState(name) {
+  let st = state.hintFlow.get(name);
+  if (!st) { st = { idx: 0, revealed: new Set() }; state.hintFlow.set(name, st); }
+  return st;
+}
+/* idx 0: henüz ipucu alınmadı. idx >= 1: ilk kombo (şablon+başkent+bayrak)
+   açıldı; sonraki her basışta st.revealed büyür (birer harf daha). */
+function renderHints(name, st) {
+  if (st.idx < 1) return '';
+  const info = COUNTRY_INFO[name] || [];
+  return '🔢 ' + countLetters(name) + ' harf — ' + letterTemplate(name, st.revealed) +
+    ' &nbsp;·&nbsp; 🏛 Başkenti: <b>' + (info[0] || '—') + '</b>' +
+    ' &nbsp;·&nbsp; 🚩 <img class="hint-flag" src="' + flagUrl(name, 80) + '" alt="bayrak">';
+}
+function showHint() {
+  if (state.mp && state.mp.online && !isMyTurn()) return;
+  if (!state.activeCountry || state.ended) return;
+  const name = state.activeCountry;
+  const st = hintState(name);
+  const fb = $('guess-feedback');
+  const fullyRevealed = st.idx >= 1 && st.revealed.size >= countLetters(name);
+  if (fullyRevealed) {   /* tüm harfler açıldı — ek ücret yok */
+    fb.innerHTML = renderHints(name, st) + ' <span style="color:#94a3b8">(ipucu kalmadı)</span>';
+    fb.className = 'ok';
+    return;
+  }
+  const cost = st.idx === 0 ? DUEL.HINT_FIRST : DUEL.HINT_LETTER;
+  if (state.mp) {
+    state.mp.turnHint = true;            /* temiz seriyi bozar */
+    curPlayer().cleanStreak = 0;
+    if (state.mp.online) netSend({ t: 'hint', cost: cost });
+    if (chargePoints(curPlayer(), cost)) return;
+  } else {
+    state.freeTurnHint = true;
+    state.freeCleanStreak = 0;
+    state.freeScore -= cost;
+    updateFreeScoreUI();
+  }
+  state.hintCount++;
+  if (st.idx < 1) {
+    st.idx = 1;    /* ilk kombo: şablon + başkent + bayrak birden */
+  } else {
+    const hidden = [];
+    name.split('').forEach((ch, i) => { if (isLetterChar(ch) && !st.revealed.has(i)) hidden.push(i); });
+    if (hidden.length) st.revealed.add(hidden[Math.floor(Math.random() * hidden.length)]);
+  }
+  fb.innerHTML = renderHints(name, st);
+  fb.className = 'ok';
+}
+
+/* --- CEVABI GÖSTER --- Tek Kişilik Düello + Serbest Keşif'te kullanılabilir
+   (−50 puan): doğru sayılmaz, state.revealed'e eklenir, künye kartı açılır;
+   kart kapanınca (veya kısa bir süre sonra) Solo'da sıradaki ülkeye geçilir. */
+let revealAdvanceTimer = null;
+function scheduleRevealAdvance() {
+  clearTimeout(revealAdvanceTimer);
+  const advance = () => { if (state.mp && state.mp.solo && !state.ended) nextMpTurn(); };
+  const onCloseOnce = () => {
+    clearTimeout(revealAdvanceTimer);
+    $('info-close').removeEventListener('click', onCloseOnce);
+    advance();
+  };
+  $('info-close').addEventListener('click', onCloseOnce);
+  revealAdvanceTimer = setTimeout(() => {
+    $('info-close').removeEventListener('click', onCloseOnce);
+    hideInfoCard();
+    advance();
+  }, 4500);
+}
+function revealAnswer() {
+  if (!state.activeCountry || state.ended) return;
+  const name = state.activeCountry;
+  if (state.mp && state.mp.solo) {
+    curPlayer().cleanStreak = 0;
+    if (chargePoints(curPlayer(), DUEL.SHOW_ANSWER)) return;
+  } else if (!state.mp) {
+    state.freeTurnWrong = true;
+    state.freeCleanStreak = 0;
+    state.freeScore -= DUEL.SHOW_ANSWER;
+    updateFreeScoreUI();
+  } else {
+    return;   /* düello modunda Cevabı Göster yok */
+  }
+  state.streak = 0;
+  $('guess-input').value = name;   /* doğru sayılmaz, yalnızca gösterim */
+  state.revealed.add(name);
+  markListItemRevealed(name);
+  closeGuessPanel(true);
+  markersDirty = true;
+  repaint();
+  showToast('Cevap gösterildi: ' + name + ' (−' + DUEL.SHOW_ANSWER + ' puan)', '👁 Cevap Gösterildi');
+  showInfoCard(name, false);
+  scheduleRevealAdvance();
+}
+
+$('guess-btn').addEventListener('click', checkGuess);
+$('guess-input').addEventListener('keydown', e => { if (e.key === 'Enter') checkGuess(); });
+$('skip-btn').addEventListener('click', () => state.mp ? duelPass() : closeGuessPanel());
+$('hint-btn').addEventListener('click', showHint);
+/* 📍 Ülkeyi haritada göster: kamerayı sorulan ülkenin varsayılan
+   çerçeveleme görünümüne geri döndürür (küreyi döndürüp kaybedenler için) */
+$('locate-btn').addEventListener('click', () => {
+  if (state.activeCountry) flyTo(state.activeCountry, 800);
+});
+$('show-answer-btn').addEventListener('click', revealAnswer);
+/* 👁 Çevrimiçi düelloda sıra rakipteyken kamerayı isteğe bağlı onun
+   ülkesine uçurur (otomatik odaklanma kaldırıldığı için eklendi) */
+$('show-opp-country-btn').addEventListener('click', () => {
+  if (state.activeCountry) flyTo(state.activeCountry, 800);
+});
+
+/* ============================================================================
+   BÖLÜM 6B: ⚔️ 2 KİŞİLİK DÜELLO MODU (aynı cihazda, sıra tabanlı)
+   ----------------------------------------------------------------------------
+   Kurallar:
+   • Her oyuncu 1000 puanla başlar.
+   • Oyun her turda RASTGELE bir ülke seçer, sıradaki oyuncu adını bilmeye çalışır.
+   • Doğru bilme +100 (+ülke zorluk bonusu) · Yanlış deneme −15 ·
+     İlk ipucu (harf sayısı+şablon, başkent, bayrak hepsi birden) −30,
+     sonraki her ipucu (birer harf açar) −10 · Pas −100 (ülke rakibe
+     devredilir, bilirse +100, onun pası bedava) — aynı cihaz + çevrimiçi ortak.
+   • "Temiz seri" = ardarda, hiç yanlış denemeden ve ipucusuz bilinen ülkeler:
+     10'da +100, 20'de +200, 30'da +300 bonus.
+   • Zorluk bonusu (COUNTRY_INFO'ya göre): kolay ülke (nüfus>30M veya
+     yüzölçümü>500bin km²) bonus almaz; zor ülke (nüfus<1M veya
+     yüzölçümü<20bin km²) +50; diğerleri +25.
+   • Puanı biten (0'a düşen) oyuncu ANINDA kaybeder.
+   • Tüm ülkeler tükenirse yüksek puanlı oyuncu kazanır (eşitlikte berabere).
+   ============================================================================ */
+const DUEL = {
+  START: 1000, CORRECT: 100, WRONG: 15, PASS: 100, SHOW_ANSWER: 50,
+  HINT_FIRST: 30, HINT_LETTER: 10,
+  BONUS: { 10: 100, 20: 200, 30: 300 }
+};
+
+function curPlayer() { return state.mp.players[state.mp.turn]; }
+/* Aynı cihazda her tur "benimdir"; çevrimiçi modda yalnızca kendi sıramda oynayabilirim */
+function isMyTurn() { return !state.mp || !state.mp.online || state.mp.turn === state.mp.myIdx; }
+
+function shuffleArr(a) {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/* Aynı cihazda 2 kişilik düello */
+function startDuel() {
+  initMp({
+    online: false,
+    players: [{ label: '1. Oyuncu' }, { label: '2. Oyuncu' }],
+    queue: shuffleArr(ALL_NAMES.slice()),
+    startTurn: 0
+  });
+}
+
+/* 🎯 Tek kişilik düello: aynı puan kuralları; pas BEDAVA ve ülkeyi
+   kuyruğun sonuna atar (sonlarda yeniden sorulur); duraklatılabilir. */
+function startSolo() {
+  initMp({
+    online: false,
+    solo: true,
+    players: [{ label: 'Sen' }],
+    queue: shuffleArr(ALL_NAMES.slice()),
+    startTurn: 0
+  });
+}
+
+/* Ortak düello kurulumu (tek kişilik + yerel 2 kişilik + çevrimiçi) */
+function initMp(opts) {
+  state.mode = opts.solo ? 'solo' : 'duel';
+  state.startTime = Date.now();
+  state.mp = {
+    online: !!opts.online,
+    solo: !!opts.solo,
+    myIdx: (opts.myIdx === undefined ? null : opts.myIdx),
+    conn: opts.conn || null,
+    players: opts.players.map(p => ({ label: p.label, score: DUEL.START, cleanStreak: 0 })),
+    turn: opts.startTurn || 0,
+    queue: opts.queue,
+    qi: 0,
+    turnWrong: false,
+    turnHint: false,
+    handoff: false,     /* 2 kişilik: pas geçilen ülke rakibe devredildi mi? */
+    passCount: 0,
+    deadline: 0
+  };
+  $('duel-overlay').classList.remove('visible');
+  $('start-overlay').classList.remove('visible');
+  $('mp-bar').style.display = 'flex';
+  /* Tek kişilik + 2 kişilik düellolarda üstteki ilerleme/yanlış paneli komple
+     kalkar; süre artık üst çubukta değil, "X ülke kaldı" ifadesinin sağında
+     (mp-bar içinde) gösterilir — bkz. startElapsedClock(). */
+  $('progress').style.display = 'none';
+  $('wrong-count').style.display = 'none';
+  $('mp-p0').querySelector('.mp-pname').textContent = state.mp.players[0].label;
+  const p1el = $('mp-p1');
+  p1el.style.display = state.mp.solo ? 'none' : '';
+  if (state.mp.players[1]) p1el.querySelector('.mp-pname').textContent = state.mp.players[1].label;
+  $('mp-legend').textContent = state.mp.solo
+    ? '✓ +' + DUEL.CORRECT + ' (+zorluk+seri) · ✗ −' + DUEL.WRONG + ' · 💡 ilk ipucu −' + DUEL.HINT_FIRST + ', harf başına −' + DUEL.HINT_LETTER + ' · Pas bedava (ülkeyi sonraya atar)'
+    : '✓ +' + DUEL.CORRECT + ' (+zorluk+seri) · ✗ −' + DUEL.WRONG + ' · 💡 ilk ipucu −' + DUEL.HINT_FIRST + ', harf başına −' + DUEL.HINT_LETTER + ' · Pas −' + DUEL.PASS + ' (ülke rakibe +' + DUEL.CORRECT + ' şansı olarak geçer)';
+  startElapsedClock();
+  if (state.mp.solo) { $('pause-btn').style.display = ''; }
+  if (!state.mp.online) hideTurnBanner();
+  if (triviaTimer) { clearInterval(triviaTimer); triviaTimer = null; }
+  if (world) world.controls().autoRotate = false;
+  nextMpTurn();
+}
+
+/* Puan düşer; 0'a inen oyuncu oyunu ANINDA kaybeder. true → oyun bitti */
+function chargePoints(p, n) {
+  p.score -= n;
+  if (p.score <= 0) {
+    p.score = 0;
+    updateMpBar();
+    if (state.mp.solo) endSolo(false, 'Puan tükendi.');
+    else endDuel(1 - state.mp.turn, p.label + ' puanını tüketti.');
+    return true;
+  }
+  updateMpBar();
+  return false;
+}
+
+/* Kazanılan puan geçmişi (sol-alt "📜 Geçmiş" paneli): yeniden eskiye sırayla
+   listelenir — unshift ile en yeni kayıt her zaman başa eklenir. */
+function logScore(name, pts, label) {
+  if (!name || !pts) return;
+  state.scoreHistory.unshift({ name: name, pts: pts, label: label || null });
+  renderScoreHistory();
+}
+function renderScoreHistory() {
+  const list = $('score-history-list');
+  if (!list) return;
+  if (!state.scoreHistory.length) {
+    list.innerHTML = '<div class="sh-empty">Henüz puan kazanılmadı.</div>';
+    return;
+  }
+  list.innerHTML = state.scoreHistory.map(h =>
+    '<div class="sh-row"><span class="sh-name">' + escapeHtml(h.name) + '</span>' +
+    (h.label ? '<span class="sh-label">' + escapeHtml(h.label) + '</span>' : '') +
+    '<span class="sh-pts">+' + h.pts + '</span></div>'
+  ).join('');
+}
+
+function duelApplyCorrect() {
+  const p = curPlayer();
+  const dBonus = difficultyBonus(state.activeCountry);
+  let pts = DUEL.CORRECT + dBonus;
+  let txt = '+' + DUEL.CORRECT + (dBonus ? ' +' + dBonus + ' (zorluk)' : '');
+  p.score += pts;
+  if (!state.mp.turnWrong && !state.mp.turnHint) {
+    p.cleanStreak++;
+    const bonus = DUEL.BONUS[p.cleanStreak];
+    if (bonus) {
+      p.score += bonus;
+      pts += bonus;
+      txt += ' · 🔥 Temiz seri ' + p.cleanStreak + '! BONUS +' + bonus;
+      showToast(p.label + ' — temiz seri ' + p.cleanStreak + ' → +' + bonus + ' puan!', '🔥 Bonus!');
+    }
+  } else {
+    p.cleanStreak = 0;
+  }
+  logScore(state.activeCountry, pts, state.mp.solo ? null : p.label);
+  updateMpBar();
+  return txt;
+}
+
+/* Serbest Keşif modunun kendi puanı için duelApplyCorrect() dengi */
+function freeApplyCorrect(name) {
+  const dBonus = difficultyBonus(name);
+  let pts = DUEL.CORRECT + dBonus;
+  let txt = '+' + DUEL.CORRECT + (dBonus ? ' +' + dBonus + ' (zorluk)' : '');
+  if (!state.freeTurnWrong && !state.freeTurnHint) {
+    state.freeCleanStreak++;
+    const bonus = DUEL.BONUS[state.freeCleanStreak];
+    if (bonus) {
+      pts += bonus;
+      txt += ' · 🔥 Temiz seri ' + state.freeCleanStreak + '! BONUS +' + bonus;
+      showToast('Temiz seri ' + state.freeCleanStreak + ' → +' + bonus + ' puan!', '🔥 Bonus!');
+    }
+  } else {
+    state.freeCleanStreak = 0;
+  }
+  state.freeScore += pts;
+  logScore(name, pts, null);
+  updateFreeScoreUI();
+  return txt;
+}
+
+function duelApplyWrong() {
+  state.mp.turnWrong = true;
+  curPlayer().cleanStreak = 0;
+  chargePoints(curPlayer(), DUEL.WRONG);
+}
+
+function duelPass(auto) {
+  if (state.mp && state.mp.online && !isMyTurn()) return;
+  if (!state.activeCountry || state.ended || !state.mp) return;
+  /* 🎯 Tek kişilik: pas BEDAVA — ülke kuyruğun sonuna gider, ileride yeniden sorulur */
+  if (state.mp.solo) {
+    state.mp.queue.push(state.activeCountry);
+    state.mp.passCount++;
+    curPlayer().cleanStreak = 0;
+    showToast('Listenin sonuna eklendi, ileride yeniden sorulacak.', '📌 Sonraya bırakıldı');
+    closeGuessPanel(true);
+    updateMpBar();
+    setTimeout(nextMpTurn, 400);
+    return;
+  }
+  /* 2 kişilik düello: hem aynı cihazda hem çevrimiçi AYNI devretme mekaniğini kullanır */
+  netSend({ t: 'pass' });
+  passCore(auto ? '⏱ Süre doldu — otomatik pas' : null);
+}
+
+/* 2 kişilik pas çekirdeği (aynı cihaz + çevrimiçi, iki taraf aynı yoldan geçer):
+   1. pas → −100, ülke AÇIKLANMAZ, rakibe +100 şansı olarak devredilir.
+   2. pas (devri alan da bilemedi) → BEDAVA, cevap açıklanır, akış devam eder. */
+function passCore(flashText) {
+  const country = state.activeCountry;
+  if (!country || state.ended) return;
+  const mp = state.mp;
+  const p = curPlayer();
+  p.cleanStreak = 0;
+  mp.passCount++;
+  if (!mp.handoff) {
+    if (chargePoints(p, DUEL.PASS)) return;
+    mp.handoff = true;
+    mp.turn ^= 1;
+    mp.turnWrong = false;
+    mp.turnHint = false;
+    updateMpBar();
+    if (flashText) flashBanner(flashText);
+    showToast('Aynı ülke rakibe soruluyor: bilirse +' + DUEL.CORRECT + ', pas derse bedava.', '🏳 Pas (−' + DUEL.PASS + ')');
+    setTimeout(startHandoffTurn, 400);
+  } else {
+    mp.handoff = false;
+    state.revealed.add(country);        /* iki taraf da bilemedi → cevap açıklanır */
+    markListItemRevealed(country);
+    closeGuessPanel(true);
+    showInfoCard(country, false);
+    markersDirty = true;
+    repaint();
+    if (flashText) flashBanner(flashText);
+    showToast('Cevap açıklandı: ' + country, '🏳 Pas (bedava)');
+    mp.turn ^= 1;
+    setTimeout(nextMpTurn, 900);
+  }
+}
+
+/* Devir turu: pas geçilen AYNI ülke diğer oyuncuya sorulur (+100 / bedava
+   pas). Hem aynı cihazda hem çevrimiçide kullanılır; çevrimiçide sırası
+   olmayan taraf (seyirci) kamerayı otomatik oraya uçurmaz — "Rakip ülkeyi
+   göster" butonuyla isteğe bağlı bakabilir. */
+function startHandoffTurn() {
+  const mp = state.mp;
+  if (!mp || state.ended) return;
+  const country = state.activeCountry;
+  if (!country) { nextMpTurn(); return; }
+  if (isMyTurn()) {
+    selectCountry(country, true);
+    $('guess-country-hint').innerHTML = '🎁 ' + (mp.online ? 'Rakip' : 'Diğer oyuncu') +
+      ' pas geçti — bilirsen <b>+' + DUEL.CORRECT + '</b>! (Pas bedava)';
+    $('skip-btn').textContent = 'Pas (bedava)';
+    $('show-opp-country-btn').style.display = 'none';
+  } else {
+    state.activeCountry = country;
+    $('guess-panel').classList.remove('visible');
+    $('show-opp-country-btn').style.display = mp.online ? 'inline-flex' : 'none';
+    repaint();
+  }
+  if (mp.online) startTurnTimer();
+}
+
+function nextMpTurn() {
+  const mp = state.mp;
+  if (!mp || state.ended) return;
+  stopTurnTimer();
+  mp.handoff = false;
+  if (mp.qi >= mp.queue.length) {       /* kuyruk tükendi */
+    if (mp.solo) { endSolo(state.guessed.size === ALL_NAMES.length); return; }
+    const [a, b] = mp.players;
+    endDuel(a.score === b.score ? null : (a.score > b.score ? 0 : 1),
+      'Tüm ülkeler oynandı.');
+    return;
+  }
+  const country = mp.queue[mp.qi++];
+  mp.turnWrong = false;
+  mp.turnHint = false;
+  updateMpBar();
+  flyTo(country, 1000);   /* her zaman otomatik odaklanır — seyirci tarafında da */
+  if (isMyTurn()) {
+    selectCountry(country, true);
+    $('guess-country-hint').innerHTML = mp.solo
+      ? '🎯 İşaretli ülke hangisi?'
+      : '⚔️ Sıra' + (mp.online ? ' <b>SENDE</b>' : ': <b>' + curPlayer().label + '</b>') + ' — İşaretli ülke hangisi?';
+    $('show-opp-country-btn').style.display = 'none';
+  } else {
+    /* Seyirci taraf: kamera otomatik uçar; harita döndürülürse "Rakip
+       ülkeyi göster" butonuyla tekrar bulunabilir. */
+    state.activeCountry = country;
+    $('guess-panel').classList.remove('visible');
+    $('show-opp-country-btn').style.display = mp.online ? 'inline-flex' : 'none';
+    repaint();
+  }
+  if (mp.online) startTurnTimer();
+}
+
+function updateMpBar() {
+  if (!state.mp) return;
+  state.mp.players.forEach((p, i) => {
+    const el = $('mp-p' + i);
+    el.querySelector('.mp-score').textContent = p.score;
+    el.querySelector('.mp-streak').textContent = p.cleanStreak >= 3 ? '🔥' + p.cleanStreak : '';
+    el.classList.toggle('active', state.mp.turn === i && !state.ended);
+  });
+  /* "Kalan" = henüz DOĞRU bilinmemiş ülke sayısı (kuyruktaki soru sırası değil) —
+     oyun 198 ile başlar, yalnızca doğru bilindikçe azalır. */
+  $('mp-remaining').textContent = (ALL_NAMES.length - state.guessed.size) + ' ülke kaldı';
+}
+
+function endDuel(winnerIdx, reason) {
+  state.ended = true;
+  stopTurnTimer();
+  hideTurnBanner();
+  closeGuessPanel(true);
+  updateMpBar();
+  markersDirty = true;
+  const [a, b] = state.mp.players;
+  $('win-title').textContent = winnerIdx === null ? '⚔️ Berabere!' : '🏆 ' + state.mp.players[winnerIdx].label + ' Kazandı!';
+  $('win-text').innerHTML = escapeHtml(a.label) + ': <b>' + a.score + '</b> puan · ' + escapeHtml(b.label) + ': <b>' + b.score + '</b> puan' +
+    '<br>' + escapeHtml(reason || '') + '<br>' +
+    state.guessed.size + ' ülke doğru bilindi · ' + state.revealed.size + ' açıklandı';
+  const mineIdx = state.mp.online ? state.mp.myIdx : (winnerIdx === null ? 0 : winnerIdx);
+  saveScore({
+    mode: state.mp.online ? 'Çevrimiçi Düello' : '2 Kişilik Düello',
+    skor: state.mp.players[mineIdx].score,
+    sonuc: winnerIdx === null ? 'Berabere'
+      : (state.mp.online
+          ? (winnerIdx === state.mp.myIdx ? 'Kazandı' : 'Kaybetti')
+          : state.mp.players[winnerIdx].label + ' kazandı')
+  });
+  $('win-overlay').classList.add('visible');
+}
+
+/* ============================================================================
+   BÖLÜM 6C: 🌐 ÇEVRİMİÇİ DÜELLO — PeerJS (WebRTC) eşler arası bağlantı
+   ----------------------------------------------------------------------------
+   • Oda kuran oyuncu 5 harflik kod alır; katılan kodu girer. Sinyalleşme
+     PeerJS'in ücretsiz genel sunucusundan yapılır, oyun verisi doğrudan iki
+     oyuncu arasında (P2P) akar. Hesap/anahtar gerekmez.
+   • Protokol: ev sahibi kuyruk + başlangıç sırasını üretir ve 'init' ile
+     yollar; her oyuncu YALNIZCA kendi sırasında eylem mesajı gönderir
+     ('correct' | 'wrong' | 'hint' | 'pass'), iki taraf da aynı kuralları
+     uygulayarak birebir aynı duruma ulaşır (deterministik eşleme).
+   • Tur süresi 60 sn; dolarsa sıradaki oyuncunun istemcisi otomatik pas
+     gönderir. Bağlantı kopması hükmen galibiyettir.
+   ============================================================================ */
+const duelNet = { peer: null, conn: null, code: null, nick: '', isHost: false, pending: null };
+
+/* --- sıra şeridi (banner) ve tur sayacı --- */
+let mpTimerInterval = null;
+let bannerFlash = null;
+function showTurnBanner(html) {
+  const el = $('turn-banner');
+  el.style.display = 'block';
+  el.innerHTML = html;
+}
+function hideTurnBanner() {
+  $('turn-banner').style.display = 'none';
+  $('show-opp-country-btn').style.display = 'none';   /* ikisi birlikte belirir/kaybolur */
+}
+function flashBanner(text) {
+  bannerFlash = { text: text, until: Date.now() + 2400 };
+  if (state.mp && state.mp.online && !state.ended) updateTurnCountdown();
+}
+function stopTurnTimer() {
+  if (mpTimerInterval) { clearInterval(mpTimerInterval); mpTimerInterval = null; }
+}
+function startTurnTimer() {
+  state.mp.deadline = Date.now() + CONFIG.onlineTurnSeconds * 1000;
+  stopTurnTimer();
+  updateTurnCountdown();
+  mpTimerInterval = setInterval(updateTurnCountdown, 500);
+}
+function updateTurnCountdown() {
+  const mp = state.mp;
+  if (!mp || !mp.online || state.ended) { stopTurnTimer(); return; }
+  const left = Math.max(0, Math.ceil((mp.deadline - Date.now()) / 1000));
+  const flash = (bannerFlash && Date.now() < bannerFlash.until) ? bannerFlash.text + '<br>' : '';
+  const who = isMyTurn() ? '🎯 <b>Sıra sende!</b>' : '⏳ ' + escapeHtml(curPlayer().label) + ' düşünüyor…';
+  showTurnBanner(flash + who + ' · ' + left + ' sn');
+  if (left <= 0) {
+    if (isMyTurn()) { stopTurnTimer(); duelPass(true); }
+    else if (Date.now() - mp.deadline > 20000) {   /* rakipten 20 sn haber yoksa kopmuş say */
+      stopTurnTimer();
+      onOpponentGone();
+    }
+  }
+}
+
+/* --- ağ yardımcıları --- */
+function netSend(msg) {
+  const mp = state.mp;
+  if (mp && mp.online && mp.conn) { try { mp.conn.send(msg); } catch (e) {} }
+}
+function netStatus(html) { $('duel-net-status').innerHTML = html; }
+function myNick(def) {
+  const v = ($('duel-nick').value || '').trim().slice(0, 12);
+  return v || def;
+}
+function genRoomCode() {
+  const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   /* karışan harfler (I,O,0,1) yok */
+  let c = '';
+  if (window.crypto && crypto.getRandomValues) {   /* daha öngörülemez oda kodu */
+    const buf = new Uint32Array(5);
+    crypto.getRandomValues(buf);
+    for (let i = 0; i < 5; i++) c += A[buf[i] % A.length];
+  } else {
+    for (let i = 0; i < 5; i++) c += A[Math.floor(Math.random() * A.length)];
+  }
+  return c;
+}
+async function ensurePeerJs() {
+  if (window.Peer) return true;
+  netStatus('Bağlantı kütüphanesi yükleniyor…');
+  await loadWithFallback(CONFIG.peerJsUrls);
+  return !!window.Peer;
+}
+function cleanupPeer() {
+  try { if (duelNet.conn) duelNet.conn.close(); } catch (e) {}
+  try { if (duelNet.peer) duelNet.peer.destroy(); } catch (e) {}
+  duelNet.conn = null; duelNet.peer = null; duelNet.pending = null;
+}
+
+/* --- oda kurma / katılma --- */
+async function duelHost() {
+  if (!await ensurePeerJs()) { netStatus('⚠ Bağlantı kütüphanesi yüklenemedi. İnternetini kontrol et.'); return; }
+  cleanupPeer();
+  duelNet.isHost = true;
+  duelNet.code = genRoomCode();
+  duelNet.nick = myNick('Ev Sahibi');
+  netStatus('Oda kuruluyor…');
+  const peer = duelNet.peer = new window.Peer(CONFIG.roomPrefix + duelNet.code);
+  peer.on('open', () => {
+    netStatus('Oda kodu: <span class="room-code">' + duelNet.code + '</span><br>' +
+      'Rakibin bu kodu "Katıl" kutusuna yazsın. Bekleniyor ⏳');
+  });
+  peer.on('connection', conn => {
+    if (duelNet.conn) { try { conn.close(); } catch (e) {} return; }   /* oda dolu */
+    wireConn(conn);
+  });
+  peer.on('error', netError);
+}
+async function duelJoin() {
+  const code = ($('duel-code-input').value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (code.length < 4) { netStatus('⚠ Geçerli bir oda kodu gir.'); return; }
+  if (!await ensurePeerJs()) { netStatus('⚠ Bağlantı kütüphanesi yüklenemedi. İnternetini kontrol et.'); return; }
+  cleanupPeer();
+  duelNet.isHost = false;
+  duelNet.nick = myNick('Konuk');
+  netStatus('Odaya bağlanılıyor…');
+  const peer = duelNet.peer = new window.Peer();
+  peer.on('open', () => {
+    wireConn(peer.connect(CONFIG.roomPrefix + code, { reliable: true }));
+  });
+  peer.on('error', netError);
+}
+function wireConn(conn) {
+  duelNet.conn = conn;
+  conn.on('open', () => {
+    if (duelNet.isHost) {
+      /* Ev sahibi otoritedir: kuyruğu ve ilk sırayı üretip yollar */
+      duelNet.pending = { queue: shuffleArr(ALL_NAMES.slice()), startTurn: Math.random() < 0.5 ? 0 : 1 };
+      conn.send({ t: 'init', q: duelNet.pending.queue, st: duelNet.pending.startTurn, n: duelNet.nick });
+      netStatus('Rakip bağlandı, başlatılıyor…');
+    }
+  });
+  conn.on('data', onNetMessage);
+  conn.on('close', onOpponentGone);
+  conn.on('error', onOpponentGone);
+}
+function onNetMessage(msg) {
+  /* Rakipten gelen her mesaj güvensiz kabul edilir: alan tipleri/uzunlukları
+     doğrulanır, beklenmeyen içerik sekmeyi çökertmeden yok sayılır. */
+  try {
+    if (!msg || typeof msg.t !== 'string') return;
+    if (msg.t === 'init' && !duelNet.isHost && !state.mp) {
+      if (!Array.isArray(msg.q) || msg.q.length !== ALL_NAMES.length) return;
+      if (!msg.q.every(n => CONT_OF.hasOwnProperty(n))) return;   /* bilinmeyen ülke adı → reddet */
+      duelNet.conn.send({ t: 'hello', n: duelNet.nick });
+      startOnlineMatch(msg.q, msg.st ? 1 : 0, String(msg.n || 'Ev Sahibi').slice(0, 12), 1);
+      return;
+    }
+    if (msg.t === 'hello' && duelNet.isHost && !state.mp && duelNet.pending) {
+      startOnlineMatch(duelNet.pending.queue, duelNet.pending.startTurn,
+        String(msg.n || 'Konuk').slice(0, 12), 0);
+      return;
+    }
+    if (msg.t === 'bye') { onOpponentGone(); return; }
+    applyRemoteAction(msg);
+  } catch (e) { console.error('[Dünya Ülkeleri] Ağ mesajı işlenemedi:', e); }
+}
+function startOnlineMatch(queue, startTurn, oppNick, myIdx) {
+  const labels = myIdx === 0 ? [duelNet.nick, oppNick] : [oppNick, duelNet.nick];
+  initMp({
+    online: true, myIdx: myIdx, conn: duelNet.conn,
+    players: [{ label: labels[0] }, { label: labels[1] }],
+    queue: queue, startTurn: startTurn
+  });
+}
+function netError(err) {
+  const t = err && err.type;
+  if (t === 'peer-unavailable') netStatus('⚠ Oda bulunamadı. Kodu kontrol et; oda kuran kişi beklemede olmalı.');
+  else if (t === 'unavailable-id') { netStatus('Kod çakıştı, yeni kod deneniyor…'); duelHost(); }
+  else if (!state.mp) netStatus('⚠ Bağlantı hatası (' + (t || 'bilinmiyor') + '). Yeniden dene; kurumsal ağlarda P2P engellenebilir.');
+}
+
+/* --- rakibin eylemini yerelde birebir uygula (deterministik eşleme) ---
+   Rakibin gönderdiği sayısal alanlar (ör. ipucu maliyeti) doğrudan
+   güvenilmez; izin verilen değer kümesiyle sınırlanır (bkz. 'hint'). */
+function applyRemoteAction(msg) {
+  const mp = state.mp;
+  if (!mp || !mp.online || state.ended) return;
+  if (isMyTurn()) return;               /* eylem yalnızca sırası olan rakipten kabul edilir */
+  const opp = curPlayer();
+  const oppName = escapeHtml(opp.label);
+  switch (msg.t) {
+    case 'correct': {
+      const name = state.activeCountry;
+      if (!name) return;
+      state.guessed.add(name);
+      markListItem(name);
+      const bonusTxt = duelApplyCorrect();
+      flashBanner('✓ ' + oppName + ' doğru bildi (' + bonusTxt + ')');
+      afterCorrect(name);
+      break;
+    }
+    case 'wrong':
+      duelApplyWrong();
+      flashBanner('✗ ' + oppName + ' yanlış denedi (−' + DUEL.WRONG + ')');
+      break;
+    case 'hint': {
+      const allowedCosts = new Set([DUEL.HINT_FIRST, DUEL.HINT_LETTER]);   /* rakip sahte maliyet göndermesin diye sınırlanır */
+      const cost = allowedCosts.has(msg.cost) ? msg.cost : DUEL.HINT_LETTER;
+      mp.turnHint = true;
+      opp.cleanStreak = 0;
+      chargePoints(opp, cost);
+      flashBanner('💡 ' + oppName + ' ipucu aldı (−' + cost + ')');
+      break;
+    }
+    case 'pass':
+      flashBanner(mp.handoff
+        ? '🏳 ' + oppName + ' devir pasını kullandı — cevap açıklandı'
+        : '🏳 ' + oppName + ' pas geçti (−' + DUEL.PASS + ')');
+      passCore(null);
+      break;
+  }
+}
+function onOpponentGone() {
+  if (!state.mp || !state.mp.online || state.ended) return;
+  endDuel(state.mp.myIdx, 'Rakibin bağlantısı koptu — hükmen galibiyet.');
+}
+window.addEventListener('beforeunload', () => { try { netSend({ t: 'bye' }); } catch (e) {} });
+
+/* ============================================================================
+   BÖLÜM 7: BİLGİ KARTI (bayrak + künye) VE FARE İPUCU KUTUSU
+   ============================================================================ */
+function showInfoCard(name, justGuessed) {
+  const info = COUNTRY_INFO[name];
+  $('info-flag').src = flagUrl(name, 320);
+  $('info-flag').alt = name + ' bayrağı';
+  $('info-name').textContent = name;
+  /* Yerel ad (endonim): kendi alfabesiyle, Türkçe adla aynıysa gizlenir */
+  const native = NATIVE_NAME[name];
+  $('info-native').textContent = (native && native !== name) ? native : '';
+  $('info-native').style.display = (native && native !== name) ? '' : 'none';
+  const rows = [];
+  if (info) {
+    rows.push(['Başkent', info[0]]);
+    rows.push(['Nüfus', formatPop(info[1])]);
+    rows.push(['Resmî dil', info[2]]);
+    /* Alfabe: yazı sisteminin adı + örnek harfler (görsel tanıma için) */
+    const sc = SCRIPTS[COUNTRY_SCRIPT[name] || 'latin'];
+    rows.push(['Alfabe', sc[0] + '<div class="script-sample">' + sc[1] + '</div>']);
+    rows.push(['Yüzölçümü', formatArea(info[3])]);
+  }
+  rows.push(['Kıta', CONT_OF[name]]);
+  if (info && info[4]) rows.push(['Not', info[4]]);
+  $('info-rows').innerHTML = rows.map(r =>
+    '<div class="info-row"><span class="k">' + r[0] + '</span><span class="v">' + r[1] + '</span></div>'
+  ).join('');
+  const card = $('info-card');
+  clearTimeout(infoCardFadeTimer);
+  infoCardAutoManaged = false;
+  card.classList.remove('fade-out');
+  card.classList.toggle('just-guessed', !!justGuessed);
+  card.classList.add('visible');
+}
+/* Elle/açık kapatma (✕ butonu, haritaya tıklama vb.) — her zaman anında kapatır */
+function hideInfoCard() {
+  clearTimeout(infoCardFadeTimer);
+  infoCardAutoManaged = false;
+  $('info-card').classList.remove('visible', 'fade-out');
+}
+/* 2 kişilik düellode doğru tahmin sonrası künye 5 sn görünüp yumuşakça solar.
+   infoCardAutoManaged=true iken bu süreç oyunun akış hızından (sıradaki
+   ülkeye geçiş) BAĞIMSIZ çalışır — selectCountry() bu süre boyunca kartı
+   erkenden kapatmaz (bkz. aşağıdaki kontrol). */
+let infoCardFadeTimer = null;
+let infoCardAutoManaged = false;
+function fadeOutInfoCard() {
+  clearTimeout(infoCardFadeTimer);
+  const card = $('info-card');
+  card.classList.add('fade-out');
+  infoCardFadeTimer = setTimeout(() => {
+    card.classList.remove('visible', 'fade-out');
+    infoCardAutoManaged = false;
+  }, 650);
+}
+$('info-close').addEventListener('click', hideInfoCard);
+
+const tooltip = $('country-tooltip');
+let lastMouse = { x: 0, y: 0 };
+document.addEventListener('mousemove', e => {
+  lastMouse = { x: e.clientX, y: e.clientY };
+  if (tooltip.style.display === 'block') positionTooltip();
+});
+function positionTooltip() {
+  tooltip.style.left = lastMouse.x + 'px';
+  tooltip.style.top = lastMouse.y + 'px';
+}
+function updateTooltip(d) {
+  if (!d) { tooltip.style.display = 'none'; return; }
+  const name = d.properties.name;
+  if (state.guessed.has(name)) {
+    tooltip.innerHTML = '<b>' + name + '</b>' +
+      '<img src="' + flagUrl(name, 160) + '" alt="' + name + '">' +
+      '<div class="tip-sub">Künye için tıkla</div>';
+  } else if (state.revealed.has(name)) {
+    tooltip.innerHTML = '<b>' + name + '</b>' +
+      '<img src="' + flagUrl(name, 160) + '" alt="' + name + '">' +
+      '<div class="tip-sub">Pas geçilmişti · künye için tıkla</div>';
+  } else if (state.mp) {
+    tooltip.innerHTML = '❓ <b>Bilinmeyen ülke</b><div class="tip-sub">Düelloda ülkeyi oyun seçer</div>';
+  } else {
+    tooltip.innerHTML = '❓ <b>Bilinmeyen ülke</b><div class="tip-sub">Tıkla ve tahmin et</div>';
+  }
+  tooltip.style.display = 'block';
+  positionTooltip();
+}
+
+/* ============================================================================
+   BÖLÜM 8: KENAR ÇUBUĞU (kıta listesi) VE BAŞARIMLAR
+   ============================================================================ */
+function buildList() {
+  const list = $('country-list');
+  list.innerHTML = '';
+  CONTINENTS_ORDER.forEach(cont => {
+    const group = document.createElement('div');
+    group.className = 'continent-group';
+    const label = document.createElement('div');
+    label.className = 'continent-label';
+    label.id = 'label-' + cont.replace(/\s+/g, '');
+    label.innerHTML = '<span>' + cont + '</span> <span class="cont-prog">0/' + CONTINENTS[cont].length + ' (%0)</span>';
+    const items = document.createElement('div');
+    items.className = 'continent-items';
+    label.addEventListener('click', () => items.classList.toggle('open'));
+    CONTINENTS[cont].forEach(name => {
+      const item = document.createElement('div');
+      item.className = 'country-item';
+      item.dataset.name = name;
+      item.textContent = '···';
+      item.addEventListener('click', () => {
+        if (!state.guessed.has(name) && !state.revealed.has(name)) return;
+        flyTo(name);
+        highlightCountry(name);
+        showInfoCard(name, false);
+      });
+      items.appendChild(item);
+    });
+    group.appendChild(label);
+    group.appendChild(items);
+    list.appendChild(group);
+  });
+}
+
+function markListItem(name) {
+  const el = $('country-list').querySelector('[data-name="' + CSS.escape(name) + '"]');
+  if (el) { el.textContent = name; el.classList.add('guessed'); }
+}
+/* Düelloda pas geçilen ülke listede gri görünür */
+function markListItemRevealed(name) {
+  const el = $('country-list').querySelector('[data-name="' + CSS.escape(name) + '"]');
+  if (el) { el.textContent = name; el.classList.add('revealed'); }
+}
+
+function updateProgressUI() {
+  CONTINENTS_ORDER.forEach(cont => {
+    const total = CONTINENTS[cont].length;
+    const g = CONTINENTS[cont].filter(n => state.guessed.has(n)).length;
+    const label = $('label-' + cont.replace(/\s+/g, ''));
+    if (label) {
+      const span = label.querySelector('.cont-prog');
+      if (span) span.textContent = g + '/' + total + ' (%' + Math.floor(g / total * 100) + ')';
+    }
+  });
+}
+
+$('sidebar-close').addEventListener('click', () => $('sidebar').classList.remove('open'));
+$('sidebar-toggle').addEventListener('click', () => $('sidebar').classList.add('open'));
+
+/* --- 📜 Puan Geçmişi paneli: olduğu yerden yukarı doğru açılıp kapanır --- */
+function toggleScoreHistory() {
+  const opening = !$('score-history-panel').classList.contains('open');
+  $('score-history-panel').classList.toggle('open', opening);
+  $('score-history-btn').classList.toggle('active', opening);
+}
+function hideScoreHistory() {
+  $('score-history-panel').classList.remove('open');
+  $('score-history-btn').classList.remove('active');
+}
+$('score-history-btn').addEventListener('click', toggleScoreHistory);
+$('score-history-close').addEventListener('click', hideScoreHistory);
+
+/* --- Başarımlar (özgün oyundan) --- */
+const earnedAchievements = new Set();
+function contPct(cont, pct) {
+  const total = CONTINENTS[cont].length;
+  const g = CONTINENTS[cont].filter(n => state.guessed.has(n)).length;
+  return g / total * 100 >= pct;
+}
+const ACHIEVEMENTS = [
+  { id: 'a1', name: 'Pasaport Kontrolü', desc: '5 Ülke Bul', icon: '🛂', cond: () => state.guessed.size >= 5 },
+  { id: 'a2', name: 'Sınır Ötesi', desc: '10 Ülke Bul', icon: '🎒', cond: () => state.guessed.size >= 10 },
+  { id: 'a3', name: 'Kıtalararası Gezgin', desc: '50 Ülke Bul', icon: '✈️', cond: () => state.guessed.size >= 50 },
+  { id: 'a4', name: 'Atlas Hakimi', desc: '100 Ülke Bul', icon: '🗺️', cond: () => state.guessed.size >= 100 },
+  { id: 'a5', name: 'Dünya Vatandaşı', desc: '150 Ülke Bul', icon: '🌍', cond: () => state.guessed.size >= 150 },
+  { id: 'a6', name: 'Küresel Üstad', desc: 'Hepsini Bul (' + ALL_NAMES.length + ')', icon: '🏆', cond: () => state.guessed.size >= ALL_NAMES.length },
+  { id: 'a7', name: 'Yedi Denizlerin Fatihi', desc: 'Her Kıtadan 1 Ülke', icon: '⚓', cond: () => CONTINENTS_ORDER.every(c => CONTINENTS[c].some(n => state.guessed.has(n))) },
+  { id: 'a8', name: 'Eski Kıta Yolcusu', desc: 'Avrupa %50', icon: '🏰', cond: () => contPct('Avrupa', 50) },
+  { id: 'a9', name: 'Avrupa Fatihi', desc: 'Avrupa %100', icon: '🇪🇺', cond: () => contPct('Avrupa', 100) },
+  { id: 'a10', name: 'İpek Yolu Çırağı', desc: 'Asya %50', icon: '🐪', cond: () => contPct('Asya', 50) },
+  { id: 'a11', name: 'Asya Hakimi', desc: 'Asya %100', icon: '🐉', cond: () => contPct('Asya', 100) },
+  { id: 'a12', name: 'Yeni Dünya Kâşifi', desc: 'K. Amerika %50', icon: '🗽', cond: () => contPct('Kuzey Amerika', 50) },
+  { id: 'a13', name: 'Kuzey Yıldızı', desc: 'K. Amerika %100', icon: '⭐', cond: () => contPct('Kuzey Amerika', 100) },
+  { id: 'a14', name: 'Latin Rüzgarı', desc: 'G. Amerika %50', icon: '🦜', cond: () => contPct('Güney Amerika', 50) },
+  { id: 'a15', name: 'Amazon Efsanesi', desc: 'G. Amerika %100', icon: '🐆', cond: () => contPct('Güney Amerika', 100) },
+  { id: 'a16', name: 'Çöl Tilkisi', desc: 'Afrika %50', icon: '🦊', cond: () => contPct('Afrika', 50) },
+  { id: 'a17', name: 'Safari Üstadı', desc: 'Afrika %100', icon: '🦁', cond: () => contPct('Afrika', 100) },
+  /* --- Gözden geçirmede eklenenler: Okyanusya çifti eksikti + beceri rozetleri --- */
+  { id: 'a18', name: 'Ada Kâşifi', desc: 'Okyanusya %50', icon: '🏝️', cond: () => contPct('Okyanusya', 50) },
+  { id: 'a19', name: 'Pasifik Hâkimi', desc: 'Okyanusya %100', icon: '🌊', cond: () => contPct('Okyanusya', 100) },
+  { id: 'a20', name: 'Komşu Kapısı', desc: 'Türkiye + 8 sınır komşusu', icon: '🚪',
+    cond: () => TR_NEIGHBORS.every(n => state.guessed.has(n)) },
+  { id: 'a21', name: 'Mikro Gezgin', desc: "Avrupa'nın 6 mikro devleti", icon: '🔎',
+    cond: () => EURO_MICROS.every(n => state.guessed.has(n)) },
+  { id: 'a22', name: 'Keskin Nişancı', desc: 'Üst üste 25 doğru (yanlışsız)', icon: '🎯',
+    cond: () => state.streak >= 25 },
+  { id: 'a23', name: 'Şimşek Başlangıç', desc: 'İlk 10 ülkeyi 3 dakikada bul', icon: '⚡',
+    cond: () => state.guessed.size >= 10 && state.startTime && elapsedSec() <= 180 },
+  { id: 'a24', name: 'Ada Koleksiyoncusu', desc: '12 ada ülkesi bul', icon: '⛵',
+    cond: () => ISLAND_NATIONS.filter(n => state.guessed.has(n)).length >= 12 }
+];
+const TR_NEIGHBORS = ['Türkiye', 'Yunanistan', 'Bulgaristan', 'Gürcistan', 'Ermenistan',
+  'Azerbaycan', 'İran', 'Irak', 'Suriye'];
+const EURO_MICROS = ['Vatikan', 'San Marino', 'Monako', 'Lihtenştayn', 'Andorra', 'Malta'];
+const ISLAND_NATIONS = ['İzlanda', 'İrlanda', 'Birleşik Krallık', 'Malta',
+  'Güney Kıbrıs Rum Yönetimi', 'Kuzey Kıbrıs Türk Cumhuriyeti', 'Japonya', 'Filipinler',
+  'Endonezya', 'Sri Lanka', 'Maldivler', 'Tayvan', 'Singapur', 'Bahreyn', 'Madagaskar',
+  'Seyşeller', 'Komorlar', 'Mauritius', 'São Tomé ve Príncipe', 'Yeşil Burun Adaları',
+  'Küba', 'Haiti', 'Dominik Cumhuriyeti', 'Jamaika', 'Bahamalar', 'Barbados',
+  'Trinidad ve Tobago', 'Grenada', 'Saint Lucia', 'Dominika', 'Antigua ve Barbuda',
+  'Saint Kitts ve Nevis', 'Saint Vincent ve Grenadinler', 'Yeni Zelanda', 'Fiji',
+  'Solomon Adaları', 'Vanuatu', 'Samoa', 'Tonga', 'Kiribati', 'Marshall Adaları',
+  'Mikronezya', 'Palau', 'Nauru', 'Tuvalu'];
+function initAchievements() {
+  const grid = $('achievements-grid');
+  ACHIEVEMENTS.forEach(a => {
+    const div = document.createElement('div');
+    div.className = 'ach-icon';
+    div.id = 'ach-' + a.id;
+    div.dataset.tooltip = 'KİLİTLİ — ' + a.desc;
+    div.textContent = '⬛';
+    grid.appendChild(div);
+  });
+}
+function checkAchievements() {
+  ACHIEVEMENTS.forEach(a => {
+    if (earnedAchievements.has(a.id) || !a.cond()) return;
+    earnedAchievements.add(a.id);
+    const el = $('ach-' + a.id);
+    if (el) { el.textContent = a.icon; el.dataset.tooltip = a.name + ' — ' + a.desc; }
+    showToast('#' + a.name, 'Başarım Kazanıldı!');
+  });
+}
+
+/* ============================================================================
+   BÖLÜM 9: İLERİ SAYAN SAAT, DURAKLATMA, OYUN SONU VE SKOR TABLOSU
+   ============================================================================ */
+let clockInterval = null;
+/* Duraklatmalar düşülmüş geçen süre (saniye) */
+function elapsedSec() {
+  if (!state.startTime) return 0;
+  const pausedLive = state.pausedAt ? (Date.now() - state.pausedAt) : 0;
+  return Math.max(0, Math.floor((Date.now() - state.startTime - state.pausedTotal - pausedLive) / 1000));
+}
+/* Serbest modda süre üst çubukta (#timer-box) görünür; tek/2 kişilik
+   düellolarda ise üst panel kalktığı için süre "X ülke kaldı" ifadesinin
+   sağında (#mp-timer, mp-bar içinde) gösterilir. */
+function startElapsedClock() {
+  const inMp = !!state.mp;
+  $('timer-box').style.display = inMp ? 'none' : '';
+  $('mp-timer').style.display = inMp ? '' : 'none';
+  $('timer').textContent = '0:00';
+  $('mp-timer-val').textContent = '0:00';
+  if (clockInterval) clearInterval(clockInterval);
+  clockInterval = setInterval(() => {
+    if (!state.ended && !state.pausedAt) {
+      const t = formatTime(elapsedSec());
+      $('timer').textContent = t;
+      $('mp-timer-val').textContent = t;
+    }
+  }, 1000);
+}
+
+/* --- Duraklatma (serbest + tek kişilik; çevrimiçi düelloda kapalı) --- */
+function pauseGame() {
+  if (state.ended || state.pausedAt) return;
+  if (state.mp && state.mp.online) return;
+  state.pausedAt = Date.now();
+  $('pause-overlay').classList.add('visible');
+}
+function resumeGame() {
+  if (!state.pausedAt) return;
+  state.pausedTotal += Date.now() - state.pausedAt;
+  state.pausedAt = null;
+  $('pause-overlay').classList.remove('visible');
+}
+$('pause-btn').addEventListener('click', pauseGame);
+$('resume-btn').addEventListener('click', resumeGame);
+$('pause-overlay').addEventListener('click', e => { if (e.target === $('pause-overlay')) resumeGame(); });
+
+/* --- Kişisel skor tablosu (tarayıcıda saklanır) --- */
+function saveScore(part) {
+  const entry = Object.assign({
+    tarih: new Date().toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }),
+    sure: formatTime(elapsedSec()),
+    dogru: state.guessed.size,
+    yanlis: state.wrongCount,
+    ipucu: state.hintCount
+  }, part);
+  try {
+    const arr = JSON.parse(localStorage.getItem('dunya_skorlar') || '[]');
+    arr.unshift(entry);
+    localStorage.setItem('dunya_skorlar', JSON.stringify(arr.slice(0, 30)));
+  } catch (e) {}
+}
+function openScoreboard() {
+  let arr = [];
+  try { arr = JSON.parse(localStorage.getItem('dunya_skorlar') || '[]'); } catch (e) {}
+  $('scoreboard-body').innerHTML = arr.length
+    ? '<div class="sb-row sb-head"><span>Tarih</span><span>Mod</span><span>D/Y/İ</span><span>Süre</span><span>Skor</span><span>Sonuç</span></div>' +
+      arr.map(e =>
+        '<div class="sb-row"><span>' + e.tarih + '</span><span>' + e.mode + '</span><span>' +
+        e.dogru + '/' + e.yanlis + '/' + e.ipucu + '</span><span>' + e.sure + '</span><b>' +
+        e.skor + '</b><span>' + e.sonuc + '</span></div>').join('')
+    : '<div class="sb-empty">Henüz kayıt yok — ilk oyununu bitir, skorların burada birikecek.</div>';
+  $('scoreboard-overlay').classList.add('visible');
+}
+$('scoreboard-link').addEventListener('click', openScoreboard);
+$('win-scores-btn').addEventListener('click', openScoreboard);
+$('scoreboard-clear').addEventListener('click', () => {
+  try { localStorage.removeItem('dunya_skorlar'); } catch (e) {}
+  openScoreboard();
+});
+
+/* Serbest Keşif skorunu üst çubukta günceller (yalnızca 'free' modda görünür) */
+function updateFreeScoreUI() {
+  const el = $('free-score');
+  if (el) el.textContent = state.freeScore;
+}
+
+/* --- Oyun sonları --- */
+/* Serbest mod: tüm dünya bulununca istatistik + skor */
+function showWin() {
+  state.ended = true;
+  $('win-title').textContent = '🎉 Tebrikler!';
+  $('win-text').innerHTML =
+    'Tüm ' + ALL_NAMES.length + ' ülkeyi buldun!<br>' +
+    'Skor: <b>' + state.freeScore + '</b> puan<br>' +
+    '⏱ ' + formatTime(elapsedSec()) + ' · ' + state.wrongCount + ' yanlış · ' + state.hintCount + ' ipucu';
+  saveScore({ mode: 'Serbest', skor: state.freeScore, sonuc: 'Bitirdi' });
+  $('win-overlay').classList.add('visible');
+}
+/* Tek kişilik düello sonu (kazanma veya puan bitmesi) */
+function endSolo(win, reason) {
+  state.ended = true;
+  stopTurnTimer();
+  hideTurnBanner();
+  closeGuessPanel(true);
+  markersDirty = true;
+  const p = state.mp.players[0];
+  $('win-title').textContent = win ? '🏆 Dünyayı Fethettin!' : '💔 Puanın Bitti';
+  $('win-text').innerHTML =
+    'Skor: <b>' + p.score + '</b> puan · ⏱ ' + formatTime(elapsedSec()) + '<br>' +
+    state.guessed.size + ' doğru · ' + state.wrongCount + ' yanlış · ' +
+    state.hintCount + ' ipucu · ' + state.mp.passCount + ' pas' +
+    (reason ? '<br>' + reason : '');
+  saveScore({ mode: 'Tek Kişilik Düello', skor: p.score, sonuc: win ? 'Bitirdi' : 'Puan bitti' });
+  $('win-overlay').classList.add('visible');
+}
+$('restart-btn').addEventListener('click', () => location.reload());
+document.querySelectorAll('.overlay-close').forEach(btn =>
+  btn.addEventListener('click', () => $(btn.dataset.close).classList.remove('visible')));
+['win-overlay', 'scoreboard-overlay'].forEach(id =>
+  $(id).addEventListener('click', e => { if (e.target === $(id)) $(id).classList.remove('visible'); }));
+
+/* ============================================================================
+   BÖLÜM 10: BAŞLATMA — kütüphaneler → veri → küre → başlangıç ekranı
+   ============================================================================ */
+function setLoad(pct, msg) {
+  $('loading-bar').style.width = pct + '%';
+  if (msg) $('loading-status').textContent = msg;
+}
+
+/* İyileştirilmiş sınır verisini geojson olarak indir (başlangıç ekranındaki bağlantı) */
+function exportGeojson() {
+  if (!WORLD) return;
+  const out = {
+    type: 'FeatureCollection',
+    features: WORLD.features.map(f => ({
+      type: 'Feature',
+      properties: {
+        name: f.properties.name,
+        continent: f.properties.continent,
+        baskent: (COUNTRY_INFO[f.properties.name] || [])[0],
+        nufus: (COUNTRY_INFO[f.properties.name] || [])[1],
+        dil: (COUNTRY_INFO[f.properties.name] || [])[2],
+        yuzolcumu_km2: (COUNTRY_INFO[f.properties.name] || [])[3],
+        yerel_ad: NATIVE_NAME[f.properties.name] || f.properties.name
+      },
+      geometry: f.geometry
+    }))
+  };
+  const blob = new Blob([JSON.stringify(out)], { type: 'application/geo+json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'dunya_ulkeleri.geojson';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+$('export-link').addEventListener('click', exportGeojson);
+
+/* --- Başlangıç ekranı: dönen coğrafya bilgileri ("Biliyor muydun?") --- */
+const TRIVIA = [
+  "En küçük ülke Vatikan'dır: 0,49 km² — birçok çiftlikten bile küçük.",
+  "Rusya 11 saat dilimine yayılır; bir ucunda sabahken diğerinde gece olur.",
+  "Kazakistan, denize kıyısı olmayan en büyük ülkedir.",
+  "Endonezya 17 binden fazla adadan oluşur.",
+  "Nepal, dikdörtgen olmayan bayrağa sahip tek ülkedir.",
+  "Çin ve Rusya, 14'er kara komşusuyla dünya rekorunu paylaşır.",
+  "Lesotho, San Marino ve Vatikan: tamamı tek bir ülkeyle çevrili üç ülke.",
+  "Afrika, 54 ülkeyle en çok ülke barındıran kıtadır.",
+  "Kanada, dünyanın en uzun kıyı şeridine sahiptir (~202.000 km).",
+  "Bolivya'nın iki, Güney Afrika'nın üç başkenti vardır.",
+  "Dünya nüfusunun yaklaşık %60'ı Asya'da yaşar.",
+  "Türkiye, hem Avrupa hem Asya'da toprağı olan sayılı ülkelerden biridir."
+];
+let triviaTimer = null;
+function startTriviaRotation() {
+  const el = $('trivia-text');
+  if (!el) return;
+  let i = Math.floor(Math.random() * TRIVIA.length);
+  const show = () => { el.style.opacity = 0; setTimeout(() => { el.textContent = TRIVIA[i % TRIVIA.length]; el.style.opacity = 1; i++; }, 250); };
+  el.textContent = TRIVIA[i % TRIVIA.length]; i++;
+  triviaTimer = setInterval(show, 7000);
+}
+
+function startGame(mode) {
+  state.mode = mode;
+  state.startTime = Date.now();
+  $('start-overlay').classList.remove('visible');
+  if (triviaTimer) { clearInterval(triviaTimer); triviaTimer = null; }
+  if (world) world.controls().autoRotate = false;
+  startElapsedClock();                    /* süre 0'dan ileri sayar */
+  $('pause-btn').style.display = '';
+  $('free-score-box').style.display = mode === 'free' ? '' : 'none';
+  updateFreeScoreUI();
+}
+$('mode-free').addEventListener('click', () => startGame('free'));
+$('mode-solo').addEventListener('click', startSolo);
+/* Düello: önce kurallar ekranı, sonra başlat */
+$('mode-duel').addEventListener('click', () => {
+  $('start-overlay').classList.remove('visible');
+  $('duel-overlay').classList.add('visible');
+});
+$('duel-start-btn').addEventListener('click', startDuel);
+$('duel-cancel-btn').addEventListener('click', () => {
+  cleanupPeer();
+  netStatus('');
+  $('duel-overlay').classList.remove('visible');
+  $('start-overlay').classList.add('visible');
+});
+$('duel-host-btn').addEventListener('click', duelHost);
+$('duel-join-btn').addEventListener('click', duelJoin);
+$('duel-code-input').addEventListener('input', e => { e.target.value = e.target.value.toUpperCase(); });
+$('duel-code-input').addEventListener('keydown', e => { if (e.key === 'Enter') duelJoin(); });
+
+window.addEventListener('resize', () => {
+  if (world) world.width(window.innerWidth).height(window.innerHeight);
+  markersDirty = true;
+});
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeAllPanels();
+});
+
+/* Tüm modlarda geçerli: haritaya, listeye ya da sayfanın başka bir yerine
+   tıklanmış olsa bile (odak tahmin kutusundan başka bir şeyde olsa bile),
+   kullanıcı klavyeden yazmaya başladığı an tahmin kutusuna odak otomatik
+   geçer ve yazdığı harf doğrudan oraya işlenir. Şu an tahmin edilecek aktif
+   bir ülke yoksa (guess-panel görünür değilse) dokunulmaz. */
+window.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;   /* tarayıcı kısayolları */
+  const input = $('guess-input');
+  if (document.activeElement === input) return;     /* zaten kutudaysa dokunma */
+  const activeTag = document.activeElement && document.activeElement.tagName;
+  if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' ||
+      (document.activeElement && document.activeElement.isContentEditable)) return;  /* başka bir metin alanı */
+  if (!$('guess-panel').classList.contains('visible')) return;   /* şu an aktif tahmin yok */
+  if (e.key === 'Backspace') {
+    e.preventDefault();
+    input.value = input.value.slice(0, -1);
+    input.focus();
+    return;
+  }
+  if (e.key.length === 1) {   /* tek karakterlik yazdırılabilir tuş (harf, rakam, boşluk…) */
+    e.preventDefault();
+    input.value += e.key;
+    input.focus();
+  }
+});
+
+async function init() {
+  try {
+    /* Toplam ülke sayısını gösteren tüm alanları doldur (198) */
+    document.querySelectorAll('.js-total').forEach(e => { e.textContent = ALL_NAMES.length; });
+    setLoad(5, 'Kütüphaneler yükleniyor…');
+    for (const lib of CONFIG.libs) {
+      if (!await loadWithFallback(lib)) throw new Error('Kütüphane yüklenemedi: ' + lib[0]);
+    }
+    if (!window.Globe || !window.topojson || !window.topojson.presimplify)
+      throw new Error('Kütüphaneler eksik yüklendi. Sayfayı yenileyin.');
+    setLoad(15, 'Sınır verisi indiriliyor… (~0,8 MB)');
+    WORLD = await loadBorders(setLoad);
+    WORLD.features.forEach(f => { FEATURE_OF[f.properties.name] = f; });
+    $('prog-count').textContent = '0';
+    setLoad(65, '3B küre kuruluyor…');
+    await buildGlobe(setLoad);
+    buildList();
+    initAchievements();
+    buildMarkers();
+    markersTick();
+    updateProgressUI();
+    /* Küre hazır olunca başlangıç ekranına geç */
+    let shown = false;
+    const showStart = () => {
+      if (shown) return;
+      shown = true;
+      setLoad(100, 'Hazır!');
+      setTimeout(() => {
+        $('loading-overlay').classList.remove('visible');
+        $('start-overlay').classList.add('visible');
+        startTriviaRotation();
+      }, 250);
+    };
+    if (world.onGlobeReady) world.onGlobeReady(showStart);
+    setTimeout(showStart, 3500);   /* güvence: en geç 3,5 sn sonra */
+  } catch (err) {
+    console.error(err);
+    $('loading-status').innerHTML =
+      '⚠ ' + (err.message || 'Bir hata oluştu.') +
+      '<br><br><button class="primary-btn" onclick="location.reload()">Yeniden Dene</button>';
+  }
+}
+window.addEventListener('DOMContentLoaded', init);
+
+</script>
+</body>
+</html>
